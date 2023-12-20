@@ -1,0 +1,1162 @@
+---
+title: "Angola NMS analysis 2021"
+date: "14/04/2023"
+output:
+  html_document:
+    code_folding: hide
+    highlight: zenburn
+    number_sections: no
+    theme: spacelab
+    toc: no
+    toc_collapse: no
+    toc_depth: 4
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Match Counting
+
+```{r, include = FALSE}
+## set working folder (as needed)
+#setwd("")
+
+# input file
+inputfile = "Haplotype_data.xlsx"
+
+# bin sizes (one for each marker)
+# this is the tolerance for each marker, used during match counting
+bin_sizes = c(0,0,0)
+
+# this is the size of the repeat region for each microsatellite (ie. for dimers use 2, for trimers use 3)
+locirepeats = c(3,3,3)
+
+# number of runs for MCMC algorithm
+nruns = 100#5000
+
+
+```
+
+```{r, include = FALSE}
+
+library(gtools)
+library(readxl)
+
+##### read in data
+
+
+hap_data = read_xlsx(inputfile)
+
+vec_hap_original = unique(unlist(c(hap_data[,3:ncol(hap_data)])))
+vec_hap_original = vec_hap_original[grepl("-",vec_hap_original)]
+vec_hap_numeric = seq(1:length(vec_hap_original))*3+100
+
+hap_data_numeric = apply(hap_data[, 3:ncol(hap_data)],2, function (x) vec_hap_numeric[match(x,vec_hap_original)])
+
+genotypedata_latefailures = cbind(hap_data[,c(1,2)],hap_data_numeric)
+
+genotypedata_latefailures[genotypedata_latefailures == 0] = NA # missing data has to be coded as NA
+genotypedata_latefailures[genotypedata_latefailures == "0"] = NA # missing data has to be coded as NA
+genotypedata_latefailures[genotypedata_latefailures == "N/A"] = NA # missing data has to be coded as NA
+genotypedata_latefailures[genotypedata_latefailures == "-"] = NA # missing data has to be coded as NA
+genotypedata_latefailures[genotypedata_latefailures == "NA"] = NA # missing data has to be coded as NA
+
+### recode sample names so that each pair has a " Day 0" and a " Day Failure"
+genotypedata_latefailures$Sample.ID = sub("D0$"," Day 0",genotypedata_latefailures$Sample.ID)
+genotypedata_latefailures$Sample.ID = sub("D[0-9]+$"," Day Failure",genotypedata_latefailures$Sample.ID)
+
+genotypedata_latefailures = genotypedata_latefailures[,grepl("Sample", colnames(genotypedata_latefailures)) | grepl("_", colnames(genotypedata_latefailures))]
+
+# each sample in genotypedata_latefailures has to have day 0 and day of Failure
+ids = unique(unlist(strsplit(genotypedata_latefailures$Sample.ID[grepl("Day 0",genotypedata_latefailures$Sample.ID)]," Day 0")))
+if (sum(!paste(ids, "Day Failure") %in% genotypedata_latefailures$Sample.ID) > 0) {
+  print("Error - each sample must have day 0 and day of failure data")
+}
+ids = unique(unlist(strsplit(genotypedata_latefailures$Sample.ID[grepl("Day Failure",genotypedata_latefailures$Sample.ID)]," Day Failure")))
+if (sum(!paste(ids, "Day 0") %in% genotypedata_latefailures$Sample.ID) > 0) {
+  print("Error - each sample must have day 0 and day of failure data")
+}
+
+
+```
+
+# Analysis
+
+```{r, include = FALSE}
+
+ids = unique(unlist(strsplit(genotypedata_latefailures$Sample.ID[grepl("Day 0",genotypedata_latefailures$Sample.ID)]," Day 0")))
+locinames = unique(sapply(colnames(genotypedata_latefailures)[-1],function(x) strsplit(x,"_")[[1]][1]))
+nloci = length(locinames)
+nids = length(ids)
+
+
+##### calculate MOI for each sample
+MOI0 = rep(0,nids)
+MOIf = rep(0,nids)
+for (i in 1:nids) {
+  for (j in 1:nloci) {
+    locicolumns = grepl(paste(locinames[j],"_",sep=""),colnames(genotypedata_latefailures))
+    nalleles0 = sum(!is.na(genotypedata_latefailures[grepl(paste(ids[i],"Day 0"),genotypedata_latefailures$Sample.ID),locicolumns]))
+    nallelesf = sum(!is.na(genotypedata_latefailures[grepl(paste(ids[i],"Day Failure"),genotypedata_latefailures$Sample.ID),locicolumns]))
+    
+    MOI0[i] = max(MOI0[i],nalleles0)
+    MOIf[i] = max(MOIf[i],nallelesf)
+  }
+}
+maxMOI = max(c(MOI0, MOIf),na.rm=TRUE)
+
+
+alleles0 = matrix(NA,nids,maxMOI*nloci)
+allelesf = matrix(NA,nids,maxMOI*nloci)
+mindistance = matrix(NA,nids,nloci)
+alldistance = array(NA,c(nids,nloci,maxMOI*maxMOI))
+
+## read in allele data into usable R objects (arrays)
+for (j in 1:nloci) {
+  locus = locinames[j]
+  locicolumns = grepl(paste(locus,"_",sep=""),colnames(genotypedata_latefailures))
+  oldalleles = as.vector(genotypedata_latefailures[,locicolumns])
+  if (length(dim(oldalleles)[2]) == 0) {
+    oldalleles = matrix(oldalleles,length(oldalleles),1)
+  }
+  oldalleles = matrix(as.numeric(unlist(c(oldalleles))),dim(oldalleles)[1],dim(oldalleles)[2])
+  oldalleles[is.na(oldalleles)] = NA
+  
+  alleles0[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(oldalleles)[2])] = oldalleles[grepl("Day 0",genotypedata_latefailures$Sample.ID),]
+  allelesf[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(oldalleles)[2])] = oldalleles[grepl("Day Failure",genotypedata_latefailures$Sample.ID),]
+
+}
+
+number_matches = rep(NA,nids)
+match_output = matrix("",nids*2,nloci)
+colnames(match_output) = locinames
+number_loci = rep(NA, nids)
+## count matches
+for (i in 1:nids) {
+  nmatches_temp = 0
+  nloci_temp = 0
+  for (j in 1:nloci) { # determine which alleles are recrudescing (for beginning, choose closest pair)
+    allpossiblerecrud = expand.grid(1:MOI0[i],1:MOIf[i])
+    if (sum(!is.na(alleles0[i,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + MOI0[i])])) > 0 & sum(!is.na(allelesf[i,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + MOIf[i])])) > 0){
+      nloci_temp = nloci_temp+1
+      
+      closestrecrud = which.min(sapply(1:dim(allpossiblerecrud)[1], function (x) abs(alleles0[i,maxMOI*(j-1)+allpossiblerecrud[x,1]] - allelesf[i,maxMOI*(j-1)+allpossiblerecrud[x,2]])))
+      mindistance[i,j] = abs(alleles0[i,maxMOI*(j-1)+allpossiblerecrud[closestrecrud,1]] - allelesf[i,maxMOI*(j-1)+allpossiblerecrud[closestrecrud,2]])
+      if (mindistance[i,j] <= bin_sizes[j])
+      {
+        nmatches_temp=nmatches_temp+1
+        match_output[2*(i-1)+1,j] = "R"
+      } else {
+        match_output[2*(i-1)+1,j] = "NI"
+      }
+    } else {
+      match_output[2*(i-1)+1,j] = "IND"
+    }
+  }
+  number_matches[i]=nmatches_temp
+  number_loci[i] = nloci_temp
+}
+
+```
+
+
+# Bayesian Approach
+
+```{r, include = FALSE}
+######### subroutines
+
+# recode alleles
+# genotypedata is genetic data, where first column (name "Sample ID") has the id of the sample, and rest of columns have the format nameoflocus_X, where X is the Xth allele detected
+# the first column has to have a unique ID followed by either " Day 0" or " Day Failure"
+# alleles_definitions is list of length number of loci
+# each entry is a number of alleles by 2 matrix, where the first column is the lower bound, and the last column the upper bound
+
+# output
+# [[1]] is list of length number of loci
+# each entry in the length is a vector of length number of ids
+# each entry in the vector is a string with the following format:
+# A-B-C/D-E
+# the letters represent the Ath, Bth, Cth etc allele (as defined in alleles_definitions)
+# the letters before the "/" represent day 0 alleles, and after day of failure alleles
+# Example: 5-4/2 represents an individual that had alleles 5 and 4 on day 0, and then allele 2 on day of failure
+# when nothing appears, either no alleles were detected, or alleles fell outside ranges in alleles_definitions 
+# row names are the ids
+# [[2]] is a number of ids X 2 matrix of multiplicity of infection, where first column is day 0 MOI and second column is day of failure MOI
+
+recodeallele = function(alleles_definitions_subset,proposed) {
+	
+	ret = which(proposed > alleles_definitions_subset[,1] & proposed <= alleles_definitions_subset[,2])
+	if (length(ret) == 0) {
+		ret = NA
+	}
+	ret
+}
+
+recode_alleles = function(genotypedata, alleles_definitions) {
+
+########### generate MOI for each sample
+
+ids = unique(unlist(strsplit(genotypedata$Sample.ID[grepl("Day 0",genotypedata$Sample.ID)]," Day 0")))
+locinames = unique(sapply(colnames(genotypedata)[-1],function(x) strsplit(x,"_")[[1]][1]))
+nids = length(ids)
+nloci = length(locinames)
+
+
+MOI0 = rep(0,nids)
+MOIf = rep(0,nids)
+
+# for each individual,
+# cycle through each locus and count number of separate alleles
+
+for (i in 1:nids) {
+	for (j in 1:nloci) {
+		locicolumns = grepl(paste(locinames[j],"_",sep=""),colnames(genotypedata))
+		nalleles0 = sum(!is.na(genotypedata[grepl(paste(ids[i],"Day 0"),genotypedata$Sample.ID),locicolumns]))
+		nallelesf = sum(!is.na(genotypedata[grepl(paste(ids[i],"Day Failure"),genotypedata$Sample.ID),locicolumns]))
+
+		MOI0[i] = max(MOI0[i],nalleles0)
+		MOIf[i] = max(MOIf[i],nallelesf)
+	}
+}
+
+
+
+observeddatamatrix = list()
+for (j in 1:nloci) {
+	locus = locinames[j]
+	locicolumns = grepl(paste(locus,"_",sep=""),colnames(genotypedata))
+	oldalleles = as.vector(genotypedata[,locicolumns])
+	if (length(dim(oldalleles)[2]) == 0) {
+		oldalleles = matrix(oldalleles,length(oldalleles),1)
+	}
+	newalleles = oldalleles
+	ncolumns = dim(oldalleles)[2]
+	for (i in 1:ncolumns) {
+		newalleles[,i] = (sapply(1:dim(oldalleles)[1],function (x) recodeallele(alleles_definitions[[j]],oldalleles[x,i])))
+	}
+	newalleles[is.na(newalleles)] = ""
+	
+	tempobservedata = c()
+	for (i in 1:nids) {
+		locicolumns = grepl(paste(locinames[j],"_",sep=""),colnames(genotypedata))
+		day0alleles = newalleles[grepl(paste(ids[i],"Day 0"),genotypedata$Sample.ID),]
+		day0alleles = day0alleles[day0alleles != ""]
+		dayfalleles = newalleles[grepl(paste(ids[i],"Day Failure"),genotypedata$Sample.ID),]
+		dayfalleles = dayfalleles[dayfalleles != ""]
+		tempobservedata[i] = paste(paste(sort(unique(as.numeric(day0alleles))),collapse="-"),paste(sort(unique(as.numeric(dayfalleles))),collapse="-"),sep="/")
+	}
+	observeddatamatrix[[j]] = tempobservedata
+}
+MOItemp = cbind(MOI0,MOIf)
+rownames(MOItemp) = ids
+list(observeddatamatrix = observeddatamatrix, MOI = MOItemp)
+}
+
+findposteriorfrequencies = function(x,tempdata) {
+	data = tempdata[,c(1:maxMOI)+(x-1)*maxMOI];
+	nalleles = frequencies_RR[[1]][x]
+	freq_prior_alpha = rep(1,nalleles);
+	freq_posterior_alpha = freq_prior_alpha + table(factor(c(data),levels=c(1:nalleles)));
+	frequencies_RR[[2]][x,1:nalleles] <<- rdirichlet(1, freq_posterior_alpha);
+}
+
+# generate definitions of alleles (ie binning)
+# input:
+# genotypedata is genetic data, where first column (name "Sample ID") has the id of the sample, and rest of columns have the format nameoflocus_X, where X is the Xth allele detected
+# locirepeats is vector of length number of loci with type of locus (dinucleotide, trinucleotide etc repeats)
+# maxk is a vector of length length number of loci with the maximum number of alleles for each locus 
+
+# output
+# list of length number of loci
+# each entry is a number of alleles by 2 matrix, where the first column is the lower bound, and the last column the upper bound
+
+
+define_alleles = function(genotypedata, locirepeats, maxk) {
+	
+ids = genotypedata$Sample.ID
+
+locinames = unique(sapply(colnames(genotypedata)[-1],function(x) strsplit(x,"_")[[1]][1]))
+
+nids = length(ids)
+nloci = length(locinames)
+
+#windows(16,8)
+#par(mfrow = c(2,ceiling(nloci/2)))
+alleles = list()
+observed_data = list()
+for (j in 1:nloci) {
+	locicolumns = grepl(paste(locinames[j],"_",sep=""),colnames(genotypedata))
+	raw_alleles = c(as.matrix(genotypedata[,locicolumns]))
+	raw_alleles = raw_alleles[!is.na(raw_alleles)]
+	
+	if (diff(range(raw_alleles)) < locirepeats[j]) {
+		alleles[[j]] = matrix(c(min(raw_alleles)-locirepeats[j]/2,max(raw_alleles)+locirepeats[j]/2,length(raw_alleles)),1,3)
+	} else {
+	# remove outliers
+	#raw_alleles_range = mean(raw_alleles,na.rm=TRUE) + c(-sd(raw_alleles,na.rm=TRUE)*3,sd(raw_alleles,na.rm=TRUE)*3)
+	#raw_alleles = raw_alleles[raw_alleles < raw_alleles_range[2] & raw_alleles > raw_alleles_range[1]]
+
+	breaks = seq(from = floor(min(raw_alleles))-0.5, to = (max(raw_alleles)+1), by = 1)
+	allele_values = round((breaks[2:length(breaks)] + breaks[1:(length(breaks)-1)]) / 2)
+	hist_alleles = hist(raw_alleles, breaks = breaks, plot = FALSE)
+
+	#k = 8 # number of clusters
+	#fit = pam(raw_alleles,k)
+
+	counts_by_offset = sapply(1:locirepeats[j], function (x) sum(hist_alleles$counts[seq(from = x, to = length(hist_alleles$counts), by = locirepeats[j])]))
+	possible_alleles = allele_values[seq(from = which.max(counts_by_offset), to = length(allele_values), by = locirepeats[j])]
+
+	if (min(raw_alleles) <= (min(possible_alleles)-locirepeats[j]/2)) {
+		possible_alleles = c(min(possible_alleles-locirepeats[j]),possible_alleles)
+	}
+	if (max(raw_alleles) > (max(possible_alleles)+locirepeats[j]/2)) {
+		possible_alleles = c(possible_alleles,max(possible_alleles+locirepeats[j]))
+	}
+
+	# assign clusters
+	clusters = sapply(raw_alleles, function (x) which.min(abs(possible_alleles - x)))
+	k = length(unique(clusters))
+	
+	#alleles[[j]] = unique(clusters)
+
+	#hist_by_cluster = sapply(1:length(possible_alleles), function (x) hist(raw_alleles[clusters == x], breaks = breaks,plot=FALSE)$counts)
+	colv = rep("white",length(possible_alleles))
+	colv[1:length(possible_alleles) %in% unique(clusters)] = rainbow(k)
+	#bar = barplot(t(hist_by_cluster), names = floor(allele_values),cex.names =0.5,col = colv, main = paste(locinames[j],"; Number of alleles: ", k,sep=""),ylim = c(0,max(hist_by_cluster)+2))
+	#labels = rep("",length(bar))
+	#labels[allele_values %in% possible_alleles[unique(clusters)]] = "*"
+	#text(bar, colSums(t(hist_by_cluster))+2,labels)
+
+	# find break values (lower and upper)
+	#lower_break_value = breaks[which(allele_values %in% possible_alleles[unique(clusters)])]
+	#upper_break_value = breaks[which(allele_values %in% possible_alleles[unique(clusters)])+1]
+	lower_break_value = sort(possible_alleles[unique(clusters)] - locirepeats[j]/2)
+	upper_break_value = sort(possible_alleles[unique(clusters)] + locirepeats[j]/2)
+	counts = sapply(1:length(lower_break_value), function (x) sum(raw_alleles > lower_break_value[x] & raw_alleles <= upper_break_value[x]))
+	alleles[[j]] = cbind(lower_break_value, upper_break_value, counts)
+	}
+}
+	
+#### compress
+# take maxk most frequent alleles
+
+alleles2 = list()
+for (j in 1:nloci) {
+	sortedindex = sort.int(alleles[[j]][,3],decreasing = TRUE,index.return = TRUE)$ix[1:maxk[j]]
+	if (length(alleles[[j]][,3]) <= maxk[j]) {
+		sortedindex = sort.int(alleles[[j]][,3],decreasing = TRUE,index.return = TRUE)$ix
+	}
+	print(sum(alleles[[j]][sortedindex,3])/sum(alleles[[j]][,3]))
+	alleles2[[j]] = cbind(alleles[[j]][sortedindex,1],alleles[[j]][sortedindex,2])
+}
+alleles2
+}
+
+# calculate frequencies of alleles
+# input:
+# genotypedata is genetic data, where first column (name "Sample ID") has the id of the sample, and rest of columns have the format nameoflocus_X, where X is the Xth allele detected
+# alleles_definitions is list of length number of loci
+# each entry is a number of alleles by 2 matrix, where the first column is the lower bound, and the last column the upper bound
+# output:
+# list of length number of loci
+# each entry contains a vector with frequencies of each allele (might not sum to 1 if allele definitions do not cover all observed fragment lengths)
+# output[[3]] is mean SD of within allele length
+
+calculate_frequencies3 = function(genotypedata, alleles_definitions) {
+	
+ids = genotypedata$Sample.ID
+locinames = unique(sapply(colnames(genotypedata)[-1],function(x) strsplit(x,"_")[[1]][1]))
+nids = length(ids)
+nloci = length(locinames)
+
+frequencies = list()
+
+variability = c()
+
+for (j in 1:nloci) {
+	locicolumns = grepl(paste(locinames[j],"_",sep=""),colnames(genotypedata))
+	raw_alleles = c(as.matrix(genotypedata[,locicolumns]))
+	raw_alleles = raw_alleles[!is.na(raw_alleles)]
+	low = alleles_definitions[[j]][,1]
+	high = alleles_definitions[[j]][,2]
+	frequencies[[j]] = sapply(1:dim(alleles_definitions[[j]])[1],function (x) sum(raw_alleles > low[x] & raw_alleles <= high[x]))
+	meanSD = mean(sapply(1:dim(alleles_definitions[[j]])[1],function (x) sd(raw_alleles[raw_alleles > low[x] & raw_alleles <= high[x]])),na.rm=TRUE)
+	if(is.na(meanSD)) {meanSD = 0}
+	variability[j] = meanSD
+	frequencies[[j]] = frequencies[[j]] / length(raw_alleles)
+}
+freqmatrix = matrix(0,nloci,max(unlist(lapply(frequencies,length))))
+
+for (j in 1:nloci) {
+	freqmatrix[j,1:length(frequencies[[j]])] = frequencies[[j]]
+}
+
+ret = list()
+ret[[1]] = unlist(lapply(frequencies,length))
+ret[[2]] = freqmatrix
+ret[[3]] = variability
+ret
+}
+
+
+# Switch hidden - update hidden observations as part of Gibbs MCMC 
+
+switch_hidden = function(x) {
+	z = runif(1)
+	if (sum(hidden0[x,], hiddenf[x,],na.rm=TRUE) > 0) { # if hidden alleles exist
+		if (length(which(c(hidden0[x,], hiddenf[x,])==1))>1) {
+			chosen = sample(which(c(hidden0[x,], hiddenf[x,])==1),1)
+		} else {
+			chosen = which(c(hidden0[x,], hiddenf[x,])==1)
+		}
+		if (classification[x] == 0) { # reinfection
+			if (chosen <= nloci*maxMOI) { # day 0 hidden allele
+				chosenlocus = ceiling(chosen/maxMOI)
+				old = recoded0[x,chosen]
+				new = sample(1:frequencies_RR[[1]][chosenlocus],1)
+
+
+				oldalleles = recoded0[x,intersect(((chosenlocus-1)*maxMOI+1):((chosenlocus)*maxMOI),which(hidden0[x,] == 0))]
+				repeatedold = qq
+				repeatednew = qq
+				if (sum(oldalleles == old) >= 1) { # if old allele is a repeat, don't penalize with missing probability
+					repeatedold = 1;
+				}
+				if (sum(oldalleles == new) >= 1) { # if new allele is a repeat, don't penalize with missing probability
+					repeatednew = 1;
+				}
+				#alpha = (frequencies_RR[[2]][chosenlocus,new] * repeatednew) / (frequencies_RR[[2]][chosenlocus,old] * repeatedold)
+				alpha = (sum(frequencies_RR[[2]][chosenlocus,1:frequencies_RR[[1]][chosenlocus]]*dvect[correction_distance_matrix[[chosenlocus]][,new]+1]) * repeatednew) / 
+					   (sum(frequencies_RR[[2]][chosenlocus,1:frequencies_RR[[1]][chosenlocus]]*dvect[correction_distance_matrix[[chosenlocus]][,old]+1]) * repeatedold)
+				if (z < alpha) { # switch made
+					recoded0[x,chosen] <<- new
+					####### new allele should have some variability (ie what's being see in real data)
+					newallele_length = mean(alleles_definitions_RR[[chosenlocus]][new,]) + rnorm(1,mean=0,sd=frequencies_RR[[3]][chosenlocus])
+					#possible_allele_lengths = c(alleles0[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] [recoded0[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == new & hidden0[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == 0] ,
+					#					   allelesf[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] [recodedf[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == new & hiddenf[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == 0])
+					#if (length(possible_allele_lengths) == 1) {
+					#	newallele_length = possible_allele_lengths 
+					#} else {
+					#	newallele_length = sample(possible_allele_lengths,1)
+					#}
+					alleles0[x,chosen] <<- newallele_length
+					# if (recr0[x,chosenlocus] == chosen) { # have chosen an allele that is marked as possibly recrudescing, so need to update mindistance
+											    # actually need to do this for all substitutions
+						allpossiblerecrud = expand.grid(1:MOI0[x],1:MOIf[x])
+						closestrecrud = which.min(sapply(1:dim(allpossiblerecrud)[1], function (y) abs(alleles0[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[y,1]] - allelesf[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[y,2]])))
+						mindistance[x,chosenlocus] <<- abs(alleles0[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[closestrecrud,1]] - allelesf[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[closestrecrud,2]])
+						alldistance[x,chosenlocus,1:dim(allpossiblerecrud)[1]] <<- sapply(1:dim(allpossiblerecrud)[1], function (y) abs(alleles0[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[y,1]] - allelesf[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[y,2]]))
+						allrecrf[x,chosenlocus,1:dim(allpossiblerecrud)[1]] <<- recodedf[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[,2]]
+						recr0[x,chosenlocus] <<- maxMOI*(chosenlocus-1)+allpossiblerecrud[closestrecrud,1]
+						recrf[x,chosenlocus] <<- maxMOI*(chosenlocus-1)+allpossiblerecrud[closestrecrud,2]
+						recr_repeats0[x,chosenlocus] <<- sum(recoded0[x,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == recoded0[x,recr0[x,chosenlocus]])
+						recr_repeatsf[x,chosenlocus] <<- sum(recodedf[x,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == recodedf[x,recrf[x,chosenlocus]])
+					# }
+				}
+			} else { # day f hidden allele
+				chosen = chosen - nloci*maxMOI
+				chosenlocus = ceiling(chosen/maxMOI)
+				old = recodedf[x,chosen]
+				new = sample(1:frequencies_RR[[1]][chosenlocus],1)
+				oldalleles = recodedf[x,intersect(((chosenlocus-1)*maxMOI+1):((chosenlocus)*maxMOI),which(hiddenf[x,] == 0))]
+				repeatedold = qq
+				repeatednew = qq
+				if (sum(oldalleles == old) >= 1) { # if old allele is a repeat, don't penalize with missing probability
+					repeatedold = 1;
+				}
+				if (sum(oldalleles == new) >= 1) { # if new allele is a repeat, don't penalize with missing probability
+					repeatednew = 1;
+				}
+				#alpha = (frequencies_RR[[2]][chosenlocus,new] * repeatednew) / (frequencies_RR[[2]][chosenlocus,old] * repeatedold)
+				alpha = (sum(frequencies_RR[[2]][chosenlocus,1:frequencies_RR[[1]][chosenlocus]]*dvect[correction_distance_matrix[[chosenlocus]][,new]+1]) * repeatednew) / 
+					   (sum(frequencies_RR[[2]][chosenlocus,1:frequencies_RR[[1]][chosenlocus]]*dvect[correction_distance_matrix[[chosenlocus]][,old]+1]) * repeatedold)
+				if (z < alpha) { # switch made
+					recodedf[x,chosen] <<- new
+					#newallele_length = mean(alleles_definitions_RR[[chosenlocus]][new,])
+					newallele_length = mean(alleles_definitions_RR[[chosenlocus]][new,]) + rnorm(1,mean=0,sd=frequencies_RR[[3]][chosenlocus])
+
+					####### new allele should have some variability (ie what's being see in real data)
+					
+					#possible_allele_lengths = c(alleles0[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] [recoded0[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == new & hidden0[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == 0] ,
+					#					   allelesf[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] [recodedf[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == new & hiddenf[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == 0])
+					#if (length(possible_allele_lengths) == 1) {
+					#	newallele_length = possible_allele_lengths 
+					#} else {
+					#	newallele_length = sample(possible_allele_lengths,1)
+					#}
+
+					allelesf[x,chosen] <<- newallele_length
+					# if (recrf[x,chosenlocus] == chosen) { # update mindistance
+						allpossiblerecrud = expand.grid(1:MOI0[x],1:MOIf[x])
+						closestrecrud = which.min(sapply(1:dim(allpossiblerecrud)[1], function (y) abs(alleles0[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[y,1]] - allelesf[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[y,2]])))
+						mindistance[x,chosenlocus] <<- abs(alleles0[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[closestrecrud,1]] - allelesf[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[closestrecrud,2]])
+						alldistance[x,chosenlocus,1:dim(allpossiblerecrud)[1]] <<- sapply(1:dim(allpossiblerecrud)[1], function (y) abs(alleles0[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[y,1]] - allelesf[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[y,2]]))
+						allrecrf[x,chosenlocus,1:dim(allpossiblerecrud)[1]] <<- recodedf[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[,2]]
+						recr0[x,chosenlocus] <<- maxMOI*(chosenlocus-1)+allpossiblerecrud[closestrecrud,1]
+						recrf[x,chosenlocus] <<- maxMOI*(chosenlocus-1)+allpossiblerecrud[closestrecrud,2]
+						recr_repeats0[x,chosenlocus] <<- sum(recoded0[x,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == recoded0[x,recr0[x,chosenlocus]])
+						recr_repeatsf[x,chosenlocus] <<- sum(recodedf[x,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == recodedf[x,recrf[x,chosenlocus]])
+					# }
+				}
+			}
+		} else { # recrudescence
+			if (chosen <= nloci*maxMOI) { # day 0 hidden allele
+				chosenlocus = ceiling(chosen/maxMOI)
+				old = recoded0[x,chosen]
+				new = sample(1:frequencies_RR[[1]][chosenlocus],1)
+#				newallele_length = mean(alleles_definitions_RR[[chosenlocus]][new,])
+				newallele_length = mean(alleles_definitions_RR[[chosenlocus]][new,]) + rnorm(1,mean=0,sd=frequencies_RR[[3]][chosenlocus])
+
+				#possible_allele_lengths = c(alleles0[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] [recoded0[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == new & hidden0[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == 0] ,
+				#						   allelesf[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] [recodedf[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == new & hiddenf[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == 0])
+				#if (length(possible_allele_lengths) == 1) {
+				#	newallele_length = possible_allele_lengths 
+				#} else {
+				#	newallele_length = sample(possible_allele_lengths,1)
+				#}
+				oldalleles = recoded0[x,intersect(((chosenlocus-1)*maxMOI+1):((chosenlocus)*maxMOI),which(hidden0[x,] == 0))]
+				repeatedold = qq
+				repeatednew = qq
+				if (sum(oldalleles == old) >= 1) { # if old allele is a repeat, don't penalize with missing probability
+					repeatedold = 1;
+				}
+				if (sum(oldalleles == new) >= 1) { # if new allele is a repeat, don't penalize with missing probability
+					repeatednew = 1;
+				}
+				allpossiblerecrud = expand.grid(1:MOI0[x],1:MOIf[x])
+				tempalleles = alleles0[x,maxMOI*(chosenlocus-1)+1:maxMOI]
+				tempalleles[chosen-(chosenlocus-1)*maxMOI] = newallele_length 
+				temprecoded = recoded0[x,maxMOI*(chosenlocus-1)+1:maxMOI]
+				temprecoded[chosen-(chosenlocus-1)*maxMOI] = new
+
+				newclosestrecrud = which.min(sapply(1:dim(allpossiblerecrud)[1], function (y) abs(tempalleles[allpossiblerecrud[y,1]] - allelesf[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[y,2]])))
+				newmindistance = abs(tempalleles[allpossiblerecrud[newclosestrecrud,1]] - allelesf[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[newclosestrecrud,2]])
+				newalldistance = sapply(1:dim(allpossiblerecrud)[1], function (y) abs(tempalleles[allpossiblerecrud[y,1]] - allelesf[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[y,2]]))
+				newallrecrf = recodedf[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[,2]]
+
+				# calculate new multiple-comparisons coefficient
+				newrecr0 = maxMOI*(chosenlocus-1)+allpossiblerecrud[newclosestrecrud,1]
+				newrecrf = maxMOI*(chosenlocus-1)+allpossiblerecrud[newclosestrecrud,2]
+				newrecr_repeats0 = sum(temprecoded == temprecoded[allpossiblerecrud[newclosestrecrud,1]],na.rm=TRUE)
+				newrecr_repeatsf = sum(recodedf[x,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == recodedf[x,newrecrf])
+
+				#likelihoodnew = mean(dvect[round(newalldistance)+1]/frequencies_RR[[2]][chosenlocus,newallrecrf],na.rm=TRUE) * repeatednew
+				likelihoodnew = mean(dvect[round(newalldistance)+1]/sapply(1:length(newallrecrf), function (z) sum(frequencies_RR[[2]][chosenlocus,1:frequencies_RR[[1]][chosenlocus]]*dvect[correction_distance_matrix[[chosenlocus]][,newallrecrf[z]]+1])),na.rm=TRUE) * repeatednew
+				#likelihoodold = mean(dvect[round(alldistance[x,chosenlocus,])+1]/frequencies_RR[[2]][chosenlocus,allrecrf[x,chosenlocus,]],na.rm=TRUE) * repeatedold 
+				likelihoodold = mean(dvect[round(alldistance[x,chosenlocus,])+1]/sapply(1:(maxMOI*maxMOI), function (z) sum(frequencies_RR[[2]][chosenlocus,1:frequencies_RR[[1]][chosenlocus]]*dvect[correction_distance_matrix[[chosenlocus]][,allrecrf[x,chosenlocus,z]]+1])),na.rm=TRUE) * repeatedold 
+
+				if (is.na(likelihoodnew) | is.na(likelihoodold)) { # debug
+					write.csv(alleles0,"alleles0.csv")
+					write.csv(allelesf,"allelesf.csv")
+					write.csv(hidden0,"hidden0.csv")
+					write.csv(hiddenf,"hiddenf.csv")
+					write.csv(dvect,"dvect.csv")
+					print(chosen)
+					print(chosenlocus)
+					print(chosenlocus)
+					print(old)
+					print(new)
+					print(newallele_length)
+					print(tempalleles)
+					write.csv(newalldistance,"newalldistance.csv")
+					write.csv(alldistance,"alldistance.csv")
+				}
+
+				if (likelihoodnew  == likelihoodold) {
+					# if both num and denominator are equal (for case when both are 0..., otherwise 0/0 gives NaN)
+					alpha = 1							 
+				} else {
+					alpha = likelihoodnew / likelihoodold 						 
+				}
+
+				if (z < alpha) { # switch made
+					recoded0[x,chosen] <<- new
+					alleles0[x,chosen] <<- newallele_length
+					mindistance[x,chosenlocus] <<- newmindistance
+					alldistance[x,chosenlocus,1:dim(allpossiblerecrud)[1]] <<- newalldistance
+					allrecrf[x,chosenlocus,1:dim(allpossiblerecrud)[1]] <<- newallrecrf
+					recr0[x,chosenlocus] <<- maxMOI*(chosenlocus-1)+allpossiblerecrud[newclosestrecrud,1]
+					recrf[x,chosenlocus] <<- maxMOI*(chosenlocus-1)+allpossiblerecrud[newclosestrecrud,2]
+					recr_repeats0[x,chosenlocus] <<- sum(recoded0[x,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == recoded0[x,recr0[x,chosenlocus]])
+					recr_repeatsf[x,chosenlocus] <<- sum(recodedf[x,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == recodedf[x,recrf[x,chosenlocus]])
+				}
+			} else { # day f hidden allele
+				chosen = chosen - nloci*maxMOI
+				chosenlocus = ceiling(chosen/maxMOI)
+				old = recodedf[x,chosen]
+				new = sample(1:frequencies_RR[[1]][chosenlocus],1)
+				#newallele_length = mean(alleles_definitions_RR[[chosenlocus]][new,])
+				newallele_length = mean(alleles_definitions_RR[[chosenlocus]][new,]) + rnorm(1,mean=0,sd=frequencies_RR[[3]][chosenlocus])
+				#possible_allele_lengths = c(alleles0[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] [recoded0[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == new & hidden0[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == 0] ,
+				#						   allelesf[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] [recodedf[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == new & hiddenf[,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == 0])
+				#if (length(possible_allele_lengths) == 1) {
+				#	newallele_length = possible_allele_lengths 
+				#} else {
+				#	newallele_length = sample(possible_allele_lengths,1)
+				#}
+				oldalleles = recodedf[x,intersect(((chosenlocus-1)*maxMOI+1):((chosenlocus)*maxMOI),which(hiddenf[x,] == 0))]
+				repeatedold = qq
+				repeatednew = qq
+				if (sum(oldalleles == old) >= 1) { # if old allele is a repeat, don't penalize with missing probability
+					repeatedold = 1;
+				}
+				if (sum(oldalleles == new) >= 1) { # if new allele is a repeat, don't penalize with missing probability
+					repeatednew = 1;
+				}
+				allpossiblerecrud = expand.grid(1:MOI0[x],1:MOIf[x])
+				tempalleles = allelesf[x,maxMOI*(chosenlocus-1)+1:maxMOI]
+				tempalleles[chosen-(chosenlocus-1)*maxMOI] = newallele_length 
+				temprecoded = recodedf[x,maxMOI*(chosenlocus-1)+1:maxMOI]
+				temprecoded[chosen-(chosenlocus-1)*maxMOI] = new
+				newclosestrecrud = which.min(sapply(1:dim(allpossiblerecrud)[1], function (y) abs(tempalleles[allpossiblerecrud[y,2]] - alleles0[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[y,1]])))
+				newmindistance = abs(tempalleles[allpossiblerecrud[newclosestrecrud,2]] - alleles0[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[newclosestrecrud,1]])
+				newalldistance = sapply(1:dim(allpossiblerecrud)[1], function (y) abs(tempalleles[allpossiblerecrud[y,2]] - alleles0[x,maxMOI*(chosenlocus-1)+allpossiblerecrud[y,1]]))
+				newallrecrf = temprecoded[allpossiblerecrud[,2]]
+
+				# calculate new multiple-comparisons coefficient
+				newrecr0 = maxMOI*(chosenlocus-1)+allpossiblerecrud[newclosestrecrud,1]
+				newrecrf = maxMOI*(chosenlocus-1)+allpossiblerecrud[newclosestrecrud,2]
+				newrecr_repeats0 = sum(recoded0[x,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == recoded0[x,newrecr0])
+				newrecr_repeatsf = sum(temprecoded == temprecoded[allpossiblerecrud[newclosestrecrud,2]],na.rm=TRUE)
+
+				#likelihoodnew = mean(dvect[round(newalldistance)+1]/frequencies_RR[[2]][chosenlocus,newallrecrf],na.rm=TRUE) * repeatednew
+				likelihoodnew = mean(dvect[round(newalldistance)+1]/sapply(1:length(newallrecrf), function (z) sum(frequencies_RR[[2]][chosenlocus,1:frequencies_RR[[1]][chosenlocus]]*dvect[correction_distance_matrix[[chosenlocus]][,newallrecrf[z]]+1])),na.rm=TRUE) * repeatednew
+				#likelihoodold = mean(dvect[round(alldistance[x,chosenlocus,])+1]/frequencies_RR[[2]][chosenlocus,allrecrf[x,chosenlocus,]],na.rm=TRUE) * repeatedold 
+				likelihoodold = mean(dvect[round(alldistance[x,chosenlocus,])+1]/sapply(1:(maxMOI*maxMOI), function (z) sum(frequencies_RR[[2]][chosenlocus,1:frequencies_RR[[1]][chosenlocus]]*dvect[correction_distance_matrix[[chosenlocus]][,allrecrf[x,chosenlocus,z]]+1])),na.rm=TRUE) * repeatedold 
+
+				if (is.na(likelihoodnew) | is.na(likelihoodold)) { # debug
+					write.csv(alleles0,"alleles0.csv")
+					write.csv(allelesf,"allelesf.csv")
+					write.csv(hidden0,"hidden0.csv")
+					write.csv(hiddenf,"hiddenf.csv")
+					write.csv(dvect,"dvect.csv")
+					print(chosen)
+					print(chosenlocus)
+					print(chosenlocus)
+					print(old)
+					print(new)
+					print(newallele_length)
+					print(tempalleles)
+					write.csv(newalldistance,"newalldistance.csv")
+					write.csv(alldistance,"alldistance.csv")
+				}
+
+
+				if (likelihoodnew  == likelihoodold) {
+					# if both num and denominator are equal (for case when both are 0..., otherwise 0/0 gives NaN)
+					alpha = 1							 
+				} else {
+					alpha = likelihoodnew / likelihoodold 						 
+				}
+				if (z < alpha) { # switch made
+					recodedf[x,chosen] <<- new
+					allelesf[x,chosen] <<- newallele_length
+					mindistance[x,chosenlocus] <<- newmindistance
+					alldistance[x,chosenlocus,1:dim(allpossiblerecrud)[1]] <<- newalldistance
+					allrecrf[x,chosenlocus,1:dim(allpossiblerecrud)[1]] <<- newallrecrf
+					recr0[x,chosenlocus] <<- maxMOI*(chosenlocus-1)+allpossiblerecrud[newclosestrecrud,1]
+					recrf[x,chosenlocus] <<- maxMOI*(chosenlocus-1)+allpossiblerecrud[newclosestrecrud,2]
+					recr_repeats0[x,chosenlocus] <<- sum(recoded0[x,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == recoded0[x,recr0[x,chosenlocus]])
+					recr_repeatsf[x,chosenlocus] <<- sum(recodedf[x,(maxMOI*(chosenlocus-1)+1) : (maxMOI*(chosenlocus))] == recodedf[x,recrf[x,chosenlocus]])
+				}
+			}
+		}
+	}
+}
+
+
+```
+
+
+```{r, include = FALSE}
+
+### IMPORT - not sure why it's doing it again
+
+memory.limit(size=50000)
+options(java.parameters = "-Xmx4096m")
+
+hap_data = read_xlsx(inputfile)
+vec_hap_original = unique(unlist(c(hap_data[,3:ncol(hap_data)])))
+vec_hap_original = vec_hap_original[grepl("-",vec_hap_original)]
+vec_hap_numeric = seq(1:length(vec_hap_original))*3+100
+
+hap_data_numeric = apply(hap_data[, 3:ncol(hap_data)],2, function (x) vec_hap_numeric[match(x,vec_hap_original)])
+
+genotypedata_latefailures = cbind(hap_data[,c(1,2)],hap_data_numeric)
+
+genotypedata_latefailures[genotypedata_latefailures == 0] = NA # missing data has to be coded as NA
+genotypedata_latefailures[genotypedata_latefailures == "0"] = NA # missing data has to be coded as NA
+genotypedata_latefailures[genotypedata_latefailures == "N/A"] = NA # missing data has to be coded as NA
+genotypedata_latefailures[genotypedata_latefailures == "-"] = NA # missing data has to be coded as NA
+genotypedata_latefailures[genotypedata_latefailures == "NA"] = NA # missing data has to be coded as NA
+
+### recode sample names so that each pair has a " Day 0" and a " Day Failure"
+genotypedata_latefailures$Sample.ID = sub("D0$"," Day 0",genotypedata_latefailures$Sample.ID)
+genotypedata_latefailures$Sample.ID = sub("D[0-9]+$"," Day Failure",genotypedata_latefailures$Sample.ID)
+
+genotypedata_latefailures = genotypedata_latefailures[,grepl("Sample", colnames(genotypedata_latefailures)) | grepl("Site", colnames(genotypedata_latefailures)) | grepl("_", colnames(genotypedata_latefailures))]
+
+# each sample in genotypedata_latefailures has to have day 0 and day of Failure
+ids = unique(unlist(strsplit(genotypedata_latefailures$Sample.ID[grepl("Day 0",genotypedata_latefailures$Sample.ID)]," Day 0")))
+if (sum(!paste(ids, "Day Failure") %in% genotypedata_latefailures$Sample.ID) > 0) {
+  print("Error - each sample must have day 0 and day of failure data")
+}
+ids = unique(unlist(strsplit(genotypedata_latefailures$Sample.ID[grepl("Day Failure",genotypedata_latefailures$Sample.ID)]," Day Failure")))
+if (sum(!paste(ids, "Day 0") %in% genotypedata_latefailures$Sample.ID) > 0) {
+  print("Error - each sample must have day 0 and day of failure data")
+}
+
+
+
+### background samples (from "Additional" tab)
+  additional_genotypedata = as.data.frame(read_excel(inputfile, sheet = "Additional",skip=0))
+  if (dim(additional_genotypedata)[1] > 0) { 
+    additional_genotypedata[additional_genotypedata == 0] = NA # missing data has to be coded as NA
+    additional_genotypedata[additional_genotypedata == "0"] = NA
+    additional_genotypedata[additional_genotypedata == "N/A"] = NA
+    additional_genotypedata[additional_genotypedata == "-"] = NA
+    additional_genotypedata[additional_genotypedata == "NA"] = NA
+    additional_genotypedata$Sample.ID = sub("_D0"," Day 0",additional_genotypedata$Sample.ID)
+    additional_genotypedata$Sample.ID = sub("_D[0-9]*"," Day Failure",additional_genotypedata$Sample.ID)
+  }
+  
+  # recode as numeric
+  genotypedata_latefailures[,colnames(genotypedata_latefailures)[-c(1,2)]] = sapply(colnames(genotypedata_latefailures)[-c(1,2)],function (x) as.numeric(as.character(genotypedata_latefailures[,x])))
+  additional_genotypedata[,colnames(additional_genotypedata)[-c(1,2)]] = sapply(colnames(additional_genotypedata)[-c(1,2)],function (x) as.numeric(as.character(additional_genotypedata[,x])))
+  
+colnames(genotypedata_latefailures) = gsub("_allele_","_",colnames(genotypedata_latefailures))
+```
+
+
+```{r, include = FALSE}
+
+### RUN ALGORITHM
+
+# calculate burnin (number of runs to discard) and record interval (which n_th iterations should be recorded)
+record_interval = ceiling(nruns / 1000);
+burnin = ceiling(nruns * 0.25);
+
+### identify arms (based on site column)
+
+site_names = unique(genotypedata_latefailures$Site)
+
+state_classification_all = c()
+state_parameters_all = c()
+ids_all = c()
+
+
+##### RUN BAYESIAN BY SITE
+for (site in site_names) {
+	jobname = site
+	genotypedata_RR = genotypedata_latefailures[genotypedata_latefailures$Site==site,-c(2)]
+	additional_neutral = additional_genotypedata[additional_genotypedata$Site==site,-c(2)]
+	if (dim(additional_neutral)[1] > 0) { additional_neutral$Sample.ID = paste("Additional_",1:dim(additional_neutral)[1],sep="")}
+
+	
+maxMOI = max(as.numeric(sapply(1:length(colnames(genotypedata_RR)), function (x) strsplit(colnames(genotypedata_RR)[x],"_")[[1]][2])),na.rm=TRUE)
+
+ids = unique(unlist(strsplit(genotypedata_RR$Sample.ID[grepl("Day 0",genotypedata_RR$Sample.ID)]," Day 0")))
+
+locinames = unique(sapply(colnames(genotypedata_RR)[-1],function(x) strsplit(x,"_")[[1]][1]))
+nloci = length(locinames)
+
+nids = length(ids)
+
+maxalleles=100 # maximum number of alleles in dataset
+
+
+
+#### BINNING STEP
+k = rep(maxalleles, nloci)
+alleles_definitions_RR  = define_alleles(rbind(genotypedata_RR,additional_neutral),locirepeats,k)
+
+##### calculate MOI for each sample
+MOI0 = rep(0,nids)
+MOIf = rep(0,nids)
+for (i in 1:nids) {
+	for (j in 1:nloci) {
+		locicolumns = grepl(paste(locinames[j],"_",sep=""),colnames(genotypedata_RR))
+		nalleles0 = sum(!is.na(genotypedata_RR[grepl(paste(ids[i],"Day 0"),genotypedata_RR$Sample.ID),locicolumns]))
+		nallelesf = sum(!is.na(genotypedata_RR[grepl(paste(ids[i],"Day Failure"),genotypedata_RR$Sample.ID),locicolumns]))
+
+		MOI0[i] = min(maxMOI, max(MOI0[i],nalleles0)) #### min
+		MOIf[i] = min(maxMOI, max(MOIf[i],nallelesf)) #### min
+	}
+}
+#maxMOI = max(MOI0,MOIf)
+
+
+##### define statevector
+
+alleles0 = matrix(0,nids,maxMOI*nloci)
+recoded0 = matrix(0,nids,maxMOI*nloci)
+hidden0 = matrix(NA,nids,maxMOI*nloci)
+recr0 = matrix(NA,nids,nloci)
+recr_repeats0 = matrix(NA,nids,nloci) # number of times recrudescing allele is repeated on day 0
+recr_repeatsf = matrix(NA,nids,nloci) # number of times recrudescing allele is repeated on day 0
+allelesf = matrix(0,nids,maxMOI*nloci)
+recodedf = matrix(0,nids,maxMOI*nloci)
+hiddenf = matrix(NA,nids,maxMOI*nloci)
+recrf = matrix(NA,nids,nloci)
+if (length(additional_neutral) > 0) { if (dim(additional_neutral)[1] > 0) {
+	recoded_additional_neutral = matrix(0,dim(additional_neutral)[1],maxMOI*nloci)
+}}
+mindistance = matrix(0,nids,nloci)
+alldistance = array(NA,c(nids,nloci,maxMOI*maxMOI))
+allrecrf = array(NA,c(nids,nloci,maxMOI*maxMOI))
+classification = rep(0,nids)
+##### create state 0
+
+for (j in 1:nloci) {
+	locus = locinames[j]
+	locicolumns = grepl(paste(locus,"_",sep=""),colnames(genotypedata_RR))
+	oldalleles = as.vector(genotypedata_RR[,locicolumns])
+	if (length(dim(oldalleles)[2]) == 0) {
+		oldalleles = matrix(oldalleles,length(oldalleles),1)
+	}
+	newalleles = oldalleles
+	ncolumns = dim(oldalleles)[2]
+	for (i in 1:ncolumns) {
+		newalleles[,i] = (sapply(1:dim(oldalleles)[1],function (x) recodeallele(alleles_definitions_RR[[j]],oldalleles[x,i])))
+	}
+	newalleles = matrix(as.numeric(unlist(c(newalleles))),dim(newalleles)[1],dim(newalleles)[2])
+	newalleles[is.na(newalleles)] = 0
+	oldalleles = matrix(as.numeric(unlist(c(oldalleles))),dim(oldalleles)[1],dim(oldalleles)[2])
+	oldalleles[is.na(oldalleles)] = 0
+
+	oldalleles[newalleles == 0] = 0
+	alleles0[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(oldalleles)[2])] = oldalleles[grepl("Day 0",genotypedata_RR$Sample.ID),]
+	allelesf[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(oldalleles)[2])] = oldalleles[grepl("Day Failure",genotypedata_RR$Sample.ID),]
+	recoded0[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(newalleles)[2])] = newalleles[grepl("Day 0",genotypedata_RR$Sample.ID),]
+	recodedf[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(newalleles)[2])] = newalleles[grepl("Day Failure",genotypedata_RR$Sample.ID),]
+
+}
+
+if (length(additional_neutral) > 0) { if (dim(additional_neutral)[1] > 0) {
+recoded_additional_neutral = matrix(0,dim(additional_neutral)[1],maxMOI*nloci)
+##### recode additional_neutral
+for (j in 1:nloci) {
+	locus = locinames[j]
+	locicolumns = grepl(paste(locus,"_",sep=""),colnames(genotypedata_RR))
+	oldalleles = as.vector(additional_neutral[,locicolumns])
+	if (length(dim(oldalleles)[2]) == 0) {
+		oldalleles = matrix(oldalleles,length(oldalleles),1)
+	}
+	newalleles = oldalleles
+	ncolumns = dim(oldalleles)[2]
+	for (i in 1:ncolumns) {
+		newalleles[,i] = (sapply(1:dim(oldalleles)[1],function (x) recodeallele(alleles_definitions_RR[[j]],oldalleles[x,i])))
+	}
+	newalleles = matrix(as.numeric(unlist(c(newalleles))),dim(newalleles)[1],dim(newalleles)[2])
+	newalleles[is.na(newalleles)] = 0
+	oldalleles = matrix(as.numeric(unlist(c(oldalleles))),dim(oldalleles)[1],dim(oldalleles)[2])
+	oldalleles[is.na(oldalleles)] = 0
+
+	oldalleles[newalleles == 0] = 0
+	recoded_additional_neutral[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(oldalleles)[2])] = newalleles
+}
+} else {
+	recoded_additional_neutral = c()
+}}
+
+## estimate frequencies
+
+frequencies_RR = calculate_frequencies3(rbind(genotypedata_RR,additional_neutral),alleles_definitions_RR)
+
+## assign random hidden alleles
+for (i in 1:nids) {
+	for (j in 1:nloci) {
+		nalleles0 = sum(alleles0[i,(maxMOI*(j-1)+1) : (maxMOI*(j))] != 0)
+		nmissing0 = MOI0[i] - nalleles0
+		whichnotmissing0 = ((maxMOI*(j-1)+1) : (maxMOI*(j)))[which(alleles0[i,(maxMOI*(j-1)+1) : (maxMOI*(j-1)+MOI0[i])] != 0)]
+		whichmissing0 = ((maxMOI*(j-1)+1) : (maxMOI*(j)))[which(alleles0[i,(maxMOI*(j-1)+1) : (maxMOI*(j-1)+MOI0[i])] == 0)]
+
+		if (nalleles0 > 0) {
+			hidden0[i,whichnotmissing0] = 0
+		}
+		if (nmissing0 > 0) {
+			newhiddenalleles0 = sample(1:(frequencies_RR[[1]][j]),nmissing0,replace=TRUE,frequencies_RR[[2]][j,1:(frequencies_RR[[1]][j])])
+			recoded0[i,whichmissing0] = newhiddenalleles0 
+			alleles0[i,whichmissing0] = rowMeans(alleles_definitions_RR[[j]])[newhiddenalleles0] # hidden alleles get mean allele length
+			hidden0[i,whichmissing0] = 1
+		}
+		nallelesf = sum(allelesf[i,(maxMOI*(j-1)+1) : (maxMOI*(j))] != 0)
+		nmissingf = MOIf[i] - nallelesf
+		whichnotmissingf = ((maxMOI*(j-1)+1) : (maxMOI*(j)))[which(allelesf[i,(maxMOI*(j-1)+1) : (maxMOI*(j-1)+MOIf[i])] != 0)]
+		whichmissingf = ((maxMOI*(j-1)+1) : (maxMOI*(j)))[which(allelesf[i,(maxMOI*(j-1)+1) : (maxMOI*(j-1)+MOIf[i])] == 0)]
+
+		if (nallelesf > 0) {
+			hiddenf[i,whichnotmissingf] = 0
+		}
+		if (nmissingf > 0) {
+			newhiddenallelesf = sample(1:(frequencies_RR[[1]][j]),nmissingf,replace=TRUE,frequencies_RR[[2]][j,1:(frequencies_RR[[1]][j])])
+			recodedf[i,whichmissingf] = newhiddenallelesf
+			allelesf[i,whichmissingf] = rowMeans(alleles_definitions_RR[[j]])[newhiddenallelesf] # hidden alleles get mean allele length
+			hiddenf[i,whichmissingf] = 1
+		}
+	}
+}
+
+## initial estimate of q (probability of an allele being missed)
+qq = mean(c(hidden0,hiddenf),na.rm=TRUE)
+
+## initial estimate of dvect (likelihood of error in analysis)
+dvect = rep(0,1+round(max(sapply(1:nloci,function (x) diff(range(c(alleles_definitions_RR[[x]])))))))
+#dvect[1] = 0.75
+#dvect[2] = 0.2
+#dvect[3] = 0.05
+dvect = dgeom(0:(length(dvect)-1),0.999)
+## randomly assign recrudescences/reinfections
+for (i in 1:nids) {
+	z = runif(1)
+	if (z < 0.5) {
+		classification[i] = 1
+	}
+	for (j in 1:nloci) { # determine which alleles are recrudescing (for beginning, choose closest pair)
+		allpossiblerecrud = expand.grid(1:MOI0[i],1:MOIf[i])
+		closestrecrud = which.min(sapply(1:dim(allpossiblerecrud)[1], function (x) abs(alleles0[i,maxMOI*(j-1)+allpossiblerecrud[x,1]] - allelesf[i,maxMOI*(j-1)+allpossiblerecrud[x,2]])))
+		mindistance[i,j] = abs(alleles0[i,maxMOI*(j-1)+allpossiblerecrud[closestrecrud,1]] - allelesf[i,maxMOI*(j-1)+allpossiblerecrud[closestrecrud,2]])
+		alldistance[i,j,1:dim(allpossiblerecrud)[1]] = sapply(1:dim(allpossiblerecrud)[1], function (x) abs(alleles0[i,maxMOI*(j-1)+allpossiblerecrud[x,1]] - allelesf[i,maxMOI*(j-1)+allpossiblerecrud[x,2]]))
+		allrecrf[i,j,1:dim(allpossiblerecrud)[1]] = recodedf[i,maxMOI*(j-1)+allpossiblerecrud[,2]]
+		recr0[i,j] = maxMOI*(j-1)+allpossiblerecrud[closestrecrud,1]
+		recrf[i,j] = maxMOI*(j-1)+allpossiblerecrud[closestrecrud,2]
+		recr_repeats0[i,j] = sum(recoded0[i,(maxMOI*(j-1)+1) : (maxMOI*(j))] == recoded0[i,recr0[i,j]])
+		recr_repeatsf[i,j] = sum(recodedf[i,(maxMOI*(j-1)+1) : (maxMOI*(j))] == recodedf[i,recrf[i,j]])
+	}
+}
+
+
+#### correction distance - distance between every possible allele at each locus
+### for AmpSeq, hardcode to be # of SNPs or potentially all a constant (ie 1)
+correction_distance_matrix = list() # for each locus, matrix of distances between each allele
+for (i in 1:nloci) {
+	correction_distance_matrix[[i]] = matrix(data = 1, nrow = frequencies_RR[[1]][i], ncol = frequencies_RR[[1]][i]) - diag(x = 1, nrow = frequencies_RR[[1]][i], ncol = frequencies_RR[[1]][i])
+}
+
+
+state_classification = matrix(NA,nids,(nruns-burnin)/record_interval)
+state_alleles0 = array(NA,c(nids,maxMOI*nloci,(nruns-burnin)/record_interval))
+state_allelesf = array(NA,c(nids,maxMOI*nloci,(nruns-burnin)/record_interval))
+state_parameters = matrix(NA,2+2*nloci,(nruns-burnin)/record_interval)
+
+count = 1
+dposterior = 0.999
+runmcmc = function() {
+	# propose new classification
+	likelihoodratio = sapply(1:nids, function (x) exp(sum(log(sapply(1:nloci, function (y) mean(dvect[round(alldistance[x,y,])+1]/sapply(1:(maxMOI*maxMOI), function (z) sum(frequencies_RR[[2]][y,1:frequencies_RR[[1]][y]]*dvect[correction_distance_matrix[[y]][,allrecrf[x,y,z]]+1])),na.rm=TRUE))))))
+
+	z = runif(nids)
+	newclassification = classification
+	newclassification[classification == 0 & z < likelihoodratio] = 1
+	newclassification[classification == 1 & z < 1/likelihoodratio] = 0
+	classification <<- newclassification
+	
+	# propose new hidden states
+	sapply(1:nids, function (x) switch_hidden(x))
+	
+	# propose q (beta distribution is conjugate distribution for binomial process)
+	q_prior_alpha = 0;
+	q_prior_beta = 0;
+	q_posterior_alpha = q_prior_alpha + sum(c(hidden0,hiddenf) == 1,na.rm=TRUE)
+	q_posterior_beta = q_prior_beta + sum(c(hidden0,hiddenf)==0,na.rm=TRUE)
+	if (q_posterior_alpha == 0) {
+		q_posterior_alpha =1
+	}
+	qq <<- rbeta(1, q_posterior_alpha , q_posterior_beta)
+	
+	#  update dvect (approximate using geometric distribution)
+	# only if there is at least 1 recrudescent infection
+	if (sum(classification==1) >= 1) {
+	d_prior_alpha = 100000; ### uninformative prior, but change to 100000 for strong prior around low error
+	d_prior_beta = 100; ### uninformative prior, but change to 100 for strong prior around low error
+	d_posterior_alpha = d_prior_alpha + length(c(mindistance[classification==1,]))
+	d_posterior_beta = d_prior_beta + sum(c(round(mindistance[classification==1,])))
+	if (d_posterior_beta == 0) {
+		d_posterior_beta = sum(c((mindistance[classification==1,])))
+	}
+	if (d_posterior_beta == 0) { ## algorithm will get stuck if dposterior is allowed to go to 1
+		d_posterior_beta = 1
+	}	
+
+
+	dposterior <<- rbeta(1, d_posterior_alpha , d_posterior_beta)
+	dvect = (1-dposterior) ^ (1:length(dvect)-1) * dposterior
+	dvect <<- dvect / (sum(dvect))
+	}
+
+	# update frequencies
+	# remove recrudescing alleles from calculations
+	tempdata = recoded0
+	sapply(which(classification == 1), function (x) tempdata[x,recr0[x,]] <<- 0)
+	tempdata = rbind(tempdata, recodedf)
+	sapply(1:nloci, function (x) findposteriorfrequencies(x,rbind(tempdata,recoded_additional_neutral)))
+
+	# record state
+	if (count > burnin & count %% record_interval == 0) {
+		print(count)
+		state_classification[,(count-burnin)/record_interval] <<- classification
+		state_alleles0[,,(count-burnin)/record_interval] <<- alleles0
+		state_allelesf[,,(count-burnin)/record_interval] <<- allelesf
+		state_parameters[1,(count-burnin)/record_interval] <<- qq
+		state_parameters[2,(count-burnin)/record_interval] <<- dposterior
+		state_parameters[3:(3+nloci-1),(count-burnin)/record_interval] <<- apply(frequencies_RR[[2]],1,max)
+		state_parameters[(3+nloci):(3+2*nloci-1),(count-burnin)/record_interval] <<- sapply(1:nloci,function (x) sum(frequencies_RR[[2]][x,]^2))
+
+	}
+	count <<- count + 1
+}
+
+replicate(nruns,runmcmc())
+
+## make sure no NAs in result matrices
+state_parameters = state_parameters[,!is.na(colSums(state_parameters))]
+state_classification = state_classification[,!is.na(colSums(state_classification))]
+
+## find mode of hidden alleles
+modealleles = matrix("",2*nids,maxMOI*nloci)
+for (i in 1:nids) {
+	for (j in 1:nloci) {
+		modealleles[2*(i-1)+1,((j-1)*maxMOI+1):(j*maxMOI)] = sapply(1:maxMOI, function (x) names(table(state_alleles0[i,(j-1)*maxMOI+x,]))[table(state_alleles0[i,(j-1)*maxMOI+x,])== max(table(state_alleles0[i,(j-1)*maxMOI+x,]))][1])
+		modealleles[2*(i-1)+2,((j-1)*maxMOI+1):(j*maxMOI)] = sapply(1:maxMOI, function (x) names(table(state_allelesf[i,(j-1)*maxMOI+x,]))[table(state_allelesf[i,(j-1)*maxMOI+x,])== max(table(state_allelesf[i,(j-1)*maxMOI+x,]))][1])
+	}
+}
+
+rowMeans2 = function(x){
+	if (length(dim(x)) == 0) {
+		ret = mean(x)
+	} else {
+		ret = rowMeans(x)
+	}
+	ret
+}
+
+temp_combined = c(sapply(1:length(ids), function (x) rep(rowMeans2(state_classification)[x],2)))
+outputmatrix = cbind(temp_combined,modealleles)
+colnames(outputmatrix) = c("Prob Rec",c(sapply(1:nloci, function (x) paste(locinames[x],"_",1:maxMOI,sep=""))))
+write.csv(outputmatrix,paste(jobname,"_posterior",".csv",sep=""))
+
+
+# summary statistics of parameters
+write.csv(state_parameters,paste(jobname,"_state_parameters",".csv",sep=""))
+
+summary_statisticsmatrix = cbind(format(rowMeans(state_parameters),digits=2),
+					   apply(format(t(sapply(1:dim(state_parameters)[1], function (x) quantile(state_parameters[x,],c(0.25,0.75)))),digits=2),1, function (x) paste(x,collapse="–")))
+summary_statisticsmatrix = rbind(summary_statisticsmatrix, c(format(mean(state_parameters[(3+nloci):(3+2*nloci-1),]),digits = 2),paste(format(quantile(state_parameters[(3+nloci):(3+2*nloci-1),],c(0.25,0.75)),digits=2),collapse="–")))
+summary_statisticsmatrix = as.matrix(sapply(1:dim(summary_statisticsmatrix)[1], function (x) paste(summary_statisticsmatrix[x,1], " (",summary_statisticsmatrix[x,2],")",sep="")))
+rownames(summary_statisticsmatrix) = c("q","d",locinames,locinames,"Mean diversity")
+write.csv(summary_statisticsmatrix,paste(jobname,"_summarystatistics",".csv",sep=""))
+
+	
+	state_classification_all = rbind(state_classification_all,state_classification)
+	state_parameters_all = rbind(state_parameters_all,state_parameters)
+	ids_all = c(ids_all,ids)
+}
+
+rowMeans2 = function(x){
+  if (length(dim(x)) == 0) {
+    ret = mean(x)
+  } else {
+    ret = rowMeans(x)
+  }
+  ret
+}
+
+cbind2 = function(y,x){
+  if (length(dim(x)) == 0) {
+    ret = c(y,x)
+  } else {
+    ret = cbind(y,x)
+  }
+  ret
+}
+
+posterior_distribution_of_recrudescence = rbind(cbind2(ids_all,(state_classification_all)))
+colnames(posterior_distribution_of_recrudescence)[1] = "ID"
+
+probability_of_recrudescence = rowMeans2(state_classification_all)
+
+hist(probability_of_recrudescence,breaks=10,main="Distribution of posterior probability of recrudescence",xlab="Posterior probability of recrudescence")
+
+write.csv(posterior_distribution_of_recrudescence,"microsatellite_correction.csv",row.names=FALSE)
+write.csv(probability_of_recrudescence ,"probability_of_recrudescence.csv",row.names=FALSE)
+
+probability_of_recrudescence_correctorder = as.numeric(probability_of_recrudescence[match(genotypedata_latefailures$Sample.ID,paste(ids_all, "Day 0"))])
+probability_of_recrudescence_correctorder_formatted = sapply(probability_of_recrudescence_correctorder, function (x) format(round(x,2),nsmall=2))
+probability_of_recrudescence_correctorder_formatted[is.na(probability_of_recrudescence_correctorder)] = ""
+
+probability_of_recrudescence_correctorder2 = probability_of_recrudescence_correctorder
+probability_of_recrudescence_correctorder2[is.na(probability_of_recrudescence_correctorder)] = -1
+```
+
+
+```{r output}
+
+output_table = cbind(genotypedata_latefailures,match_output,"Number of Matches" = c(rbind(number_matches, rep("",nids))),"Number of loci" = c(rbind(number_loci, rep("",nids))), "Prob. of recrudescence" = probability_of_recrudescence_correctorder_formatted)
+output_table[is.na(output_table)]=""
+
+
+library(kableExtra)
+
+# formatting loci columns 
+temp = sapply(colnames(genotypedata_latefailures)[-c(1,2)],function(x) strsplit(x,"_")[[1]][1])
+column_breaks_dark = c((which(temp[1:(length(temp)-1)] != temp[2:length(temp)]))+3,length(temp)+3)
+
+firstrow_labels = (c(" ", " ",column_breaks_dark[1]-3, diff(column_breaks_dark),nloci,2,1))
+names(firstrow_labels) = c("","",locinames,"Individual marker calls","Counting","Bayesian")
+
+
+finaltable = kbl(output_table, caption = "Table. Final classification of recrudescence versus new infection", escape=FALSE, table.attr="id=finaltable") %>%
+# add_indent(c(2:12,14:17,19:24), level_of_indent = 1) %>%
+#   add_header_above(secondrow_labels) %>%
+# add_header_above(firstrow_labels) %>%
+  kable_styling(bootstrap_options = "striped", font_size = 10, full_width = TRUE) %>%
+  column_spec((dim(output_table)[2] - nloci-2):dim(output_table)[2], bold = T) %>%
+  add_header_above(firstrow_labels) %>%
+  column_spec(column_breaks_dark, border_left = T) %>%
+    column_spec(dim(output_table)[2], background = ifelse(probability_of_recrudescence_correctorder2 < 0.5 & probability_of_recrudescence_correctorder2>=0, "#58D68D", ifelse(probability_of_recrudescence_correctorder2 >=0.5,"#EDBB99","#ffffff00"))) %>%
+
+  column_spec(1, border_left = T) %>%
+  column_spec(3, border_left = T) %>%
+  column_spec(column_breaks_dark[length(column_breaks_dark)]+nloci, border_left = T) %>%
+  column_spec(column_breaks_dark[length(column_breaks_dark)]+nloci+2, border_left = T) %>%
+  row_spec(seq(from=0,by=2,to = dim(output_table)[1]), extra_css = "border-bottom: 1px solid black") %>%
+
+#  add_indent(c(3:5,7:12), level_of_indent = 1, all_cols = FALSE) %>%
+  footnote(general="NI: New Infection; R: Recrudescence; IND: Indeterminate",general_title="")
+
+write.csv(output_table ,"output_table_noformatting.csv")
+finaltable
+```
+
+<script type="text/javascript">
+function selectElementContents(el) {
+    let body = document.body, range, sel;
+    if (document.createRange && window.getSelection) {
+        range = document.createRange();
+        sel = window.getSelection();
+        sel.removeAllRanges();
+        try {
+            range.selectNodeContents(el);
+            sel.addRange(range);
+        } catch (e) {
+            range.selectNode(el);
+            sel.addRange(range);
+        }
+    } else if (body.createTextRange) {
+        range = body.createTextRange();
+        range.moveToElementText(el);
+        range.select();
+    }
+    document.execCommand("Copy");}
+
+</script>
+<button type="button" onclick="selectElementContents( document.getElementById('finaltable') );">Copy Table</button>
+
+# References
+
+*	[WHO 2007 Genotyping guidance](https://apps.who.int/iris/handle/10665/43824)
+*	[WHO 2021 Genotyping guidance update](https://apps.who.int/iris/bitstream/handle/10665/348385/9789240038363-eng.pdf?sequence=1)
+* [TRENDS in Parasitology review on molecular correction methodology](https://pubmed.ncbi.nlm.nih.gov/36068129/)
+* [Bayesian algorithm for molecular correction](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4576024/)
