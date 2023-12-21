@@ -1,16 +1,24 @@
 
+
 # necessary libraries
 library(gtools)
 library(readxl)
 library(cluster)
 
-# input variables
+#########################
+# USER INPUT
 
-inputdata = "~/genotyping/microsatellite_analysis/BayesianAlgorithm/Microsatellites_patient_samples_results_PfPk2_msp1_msp2_bayesian.xlsx" # name of input file
-hours = 1 # number of hours to run
-locirepeats = c(3,3,3) # precision of fragment length measurement (2 or 3 for capillary electrophoresis for microsatelites/msp, 10-25 for gels)
+setwd("/scicore/home/pothin/golmon00/GitRepos/STPHrepos/TES_analytics/Bayes_TES/Microsatellites/")
 
-setwd("/scicore/home/pothin/golmon00/GitRepos/bayesian_algorithm/")
+# Name of input file
+inputdata = "PPQ_63Days_simulated.xlsx"
+# Number of hours to run, 1h minimum recommended
+hours = 1
+# Precision of fragment length measurement (2 or 3 for capillary electrophoresis for microsatelites/msp, 10-25 for gels)
+locirepeats = c(3,3,3)
+
+###########################
+
 
 source("Import_msp1.r")
 
