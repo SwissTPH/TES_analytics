@@ -1,7 +1,10 @@
 
-
+memory.limit(size=50000)
+options(java.parameters = "-Xmx4096m")
 
 ##### read in data
+
+
 genotypedata_latefailures = read_excel(inputdata,sheet=1)
 
 

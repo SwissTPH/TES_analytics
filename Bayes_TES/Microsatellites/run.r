@@ -43,5 +43,6 @@ colnames(posterior_distribution_of_recrudescence)[1] = "ID"
 
 probability_of_recrudescence = cbind(ids_all,rowMeans2(state_classification_all))
 
-hist(rowMeans2(state_classification_all),breaks=10,main="Distribution of posterior probability of recrudescence",xlab="Posterior probability of recrudescence")
-write.csv(probability_of_recrudescence,"probability_of_recrudescence_ALL.csv")
+hist(rowMeans2(state_classification_all), breaks=10,main="Distribution of posterior probability of recrudescence", xlab="Posterior probability of recrudescence")
+
+write.csv(probability_of_recrudescence, paste0(output_folder, "/", "probability_of_recrudescence_ALL.csv"))

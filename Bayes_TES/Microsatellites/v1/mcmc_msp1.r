@@ -1,3 +1,6 @@
+source("define_alleles.r")
+source("calculate_frequencies3.r")
+source("recode_alleles.r")
 
 
 ids = unique(unlist(strsplit(genotypedata_RR$Sample.ID[grepl( "Day 0",genotypedata_RR$Sample.ID)]," Day 0")))
@@ -337,6 +340,8 @@ state_classification = matrix(NA,nids,(nruns-burnin)/record_interval)
 state_alleles0 = array(NA,c(nids,maxMOI*nloci,(nruns-burnin)/record_interval))
 state_allelesf = array(NA,c(nids,maxMOI*nloci,(nruns-burnin)/record_interval))
 state_parameters = matrix(NA,3+2*nloci,(nruns-burnin)/record_interval)
+source("switch_hidden_msp1_2.r")
+source("findposteriorfrequencies.r")
 
 count = 1
 dposterior = 0.75
@@ -469,15 +474,15 @@ temp_combined = c(sapply(1:length(ids), function (x) rep(rowMeans2(state_classif
 outputmatrix = cbind(temp_combined,modealleles)
 colnames(outputmatrix) = c("Prob Rec",c(sapply(1:nloci, function (x) paste(locinames[x],"_",1:maxMOI,sep=""))))
 hist(as.numeric(temp_combined))
-write.csv(outputmatrix, paste(output_folder, "/", jobname,"_posterior",".csv",sep=""))
+write.csv(outputmatrix,paste(jobname,"_posterior",".csv",sep=""))
 
 
 # summary statistics of parameters
-write.csv(state_parameters, paste(output_folder, "/", jobname,"_state_parameters",".csv",sep=""))
+write.csv(state_parameters,paste(jobname,"_state_parameters",".csv",sep=""))
 
 summary_statisticsmatrix = cbind(format(rowMeans(state_parameters),digits=2),
 					   apply(format(t(sapply(1:dim(state_parameters)[1], function (x) quantile(state_parameters[x,],c(0.25,0.75)))),digits=2),1, function (x) paste(x,collapse="?")))
 summary_statisticsmatrix = rbind(summary_statisticsmatrix, c(format(mean(state_parameters[(3+nloci):(3+2*nloci-1),]),digits = 2),paste(format(quantile(state_parameters[(3+nloci):(3+2*nloci-1),],c(0.25,0.75)),digits=2),collapse="?")))
 summary_statisticsmatrix = as.matrix(sapply(1:dim(summary_statisticsmatrix)[1], function (x) paste(summary_statisticsmatrix[x,1], " (",summary_statisticsmatrix[x,2],")",sep="")))
 rownames(summary_statisticsmatrix) = c("q","q_crossfamily","d",locinames,locinames,"Mean diversity")
-write.csv(summary_statisticsmatrix, paste(output_folder, "/", jobname,"_summarystatistics",".csv",sep=""))
+write.csv(summary_statisticsmatrix,paste(jobname,"_summarystatistics",".csv",sep=""))
