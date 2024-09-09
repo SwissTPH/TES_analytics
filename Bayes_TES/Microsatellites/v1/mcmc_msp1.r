@@ -49,7 +49,7 @@ temp[,grepl("glurp",colnames(temp))] = round((temp[,grepl("glurp",colnames(temp)
 
 genotypedata_RR=temp
 
-
+if ((dim(additional_neutral)[1])>0) {
 msp1_mad20 = sapply(1:(dim(additional_neutral)[1]), function (x) returnnonempty(additional_neutral[x,grep("MAD20",colnames(additional_neutral))]))
 msp1_K1 = sapply(1:(dim(additional_neutral)[1]), function (x) returnnonempty(additional_neutral[x,grep("K1",colnames(additional_neutral))])+arbitrarydistance)
 #msp1_RO33 = sapply(1:(dim(additional_neutral)[1]), function (x) returnnonempty(additional_neutral[x,grep("R033",colnames(additional_neutral))])+arbitrarydistance * 2+rnorm(1,0,sd=4))
@@ -84,7 +84,9 @@ temp[,grepl("MSP2",colnames(temp))] = round((temp[,grepl("MSP2",colnames(temp))]
 temp[,grepl("glurp",colnames(temp))] = round((temp[,grepl("glurp",colnames(temp))])*msp1_mean/glurp_mean)
 
 additional_neutral=temp
-
+} else {
+  additional_neutral = genotypedata_RR[FALSE,]
+}
 
 locinames = unique(sapply(colnames(genotypedata_RR)[-1],function(x) strsplit(x,"_")[[1]][1]))
 nloci = length(locinames)
@@ -128,9 +130,7 @@ recodedf = matrix(0,nids,maxMOI*nloci)
 hiddenf = matrix(NA,nids,maxMOI*nloci)
 hidden_crossfamilyf = matrix(NA,nids,maxMOI*nloci)
 recrf = matrix(NA,nids,nloci)
-if (length(additional_neutral) > 0) { if (dim(additional_neutral)[1] > 0) {
-	recoded_additional_neutral = matrix(0,dim(additional_neutral)[1],maxMOI*nloci)
-}}
+recoded_additional_neutral = matrix(0,dim(additional_neutral)[1],maxMOI*nloci)
 mindistance = matrix(0,nids,nloci)
 alldistance = array(NA,c(nids,nloci,maxMOI*maxMOI))
 allrecrf = array(NA,c(nids,nloci,maxMOI*maxMOI))
@@ -163,33 +163,32 @@ for (j in 1:nloci) {
 }
 
 
-# 
-# if (length(additional_neutral) > 0) { if (dim(additional_neutral)[1] > 0) {
-# recoded_additional_neutral = matrix(0,dim(additional_neutral)[1],maxMOI*nloci)
-# ##### recode additional_neutral
-# for (j in 1:nloci) {
-# 	locus = locinames[j]
-# 	locicolumns = grepl(paste(locus,"_",sep=""),colnames(genotypedata_RR))
-# 	oldalleles = as.vector(additional_neutral[,locicolumns])
-# 	if (length(dim(oldalleles)[2]) == 0) {
-# 		oldalleles = matrix(oldalleles,length(oldalleles),1)
-# 	}
-# 	newalleles = oldalleles
-# 	ncolumns = dim(oldalleles)[2]
-# 	for (i in 1:ncolumns) {
-# 		newalleles[,i] = (sapply(1:dim(oldalleles)[1],function (x) recodeallele(alleles_definitions_RR[[j]],oldalleles[x,i])))
-# 	}
-# 	newalleles = matrix(as.numeric(unlist(c(newalleles))),dim(newalleles)[1],dim(newalleles)[2])
-# 	newalleles[is.na(newalleles)] = 0
-# 	oldalleles = matrix(as.numeric(unlist(c(oldalleles))),dim(oldalleles)[1],dim(oldalleles)[2])
-# 	oldalleles[is.na(oldalleles)] = 0
-# 
-# 	oldalleles[newalleles == 0] = 0
-# 	recoded_additional_neutral[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(oldalleles)[2])] = newalleles
-# }
-# } else {
-# 	recoded_additional_neutral = c()
-# }}
+if (dim(additional_neutral)[1] > 0) {
+recoded_additional_neutral = matrix(0,dim(additional_neutral)[1],maxMOI*nloci)
+##### recode additional_neutral
+for (j in 1:nloci) {
+	locus = locinames[j]
+	locicolumns = grepl(paste(locus,"_",sep=""),colnames(additional_neutral))
+	oldalleles = as.vector(additional_neutral[,locicolumns])
+	if (length(dim(oldalleles)[2]) == 0) {
+		oldalleles = matrix(oldalleles,length(oldalleles),1)
+	}
+	newalleles = oldalleles
+	ncolumns = dim(oldalleles)[2]
+	for (i in 1:ncolumns) {
+		newalleles[,i] = (sapply(1:dim(oldalleles)[1],function (x) recodeallele(alleles_definitions_RR[[j]],oldalleles[x,i])))
+	}
+	newalleles = matrix(as.numeric(unlist(c(newalleles))),dim(newalleles)[1],dim(newalleles)[2])
+	newalleles[is.na(newalleles)] = 0
+	oldalleles = matrix(as.numeric(unlist(c(oldalleles))),dim(oldalleles)[1],dim(oldalleles)[2])
+	oldalleles[is.na(oldalleles)] = 0
+
+	oldalleles[newalleles == 0] = 0
+	recoded_additional_neutral[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(oldalleles)[2])] = newalleles
+}
+} else {
+	recoded_additional_neutral = recodedf[FALSE,]
+}
 
 ## estimate frequencies
 

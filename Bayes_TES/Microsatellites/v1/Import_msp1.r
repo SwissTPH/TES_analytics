@@ -35,5 +35,9 @@ if (sum(!paste(ids, "Day 0") %in% genotypedata_latefailures$Sample.ID) > 0) {
 }
 
 additional_genotypedata = read_excel(inputdata,sheet=2)
+if (dim(additional_genotypedata)[1] > 0) {
 sampleid = paste(additional_genotypedata$PatientID,"D",additional_genotypedata$Day,sep="")
 additional_genotypedata = cbind(Sample.ID = sampleid,additional_genotypedata[,-c(1,2)])
+} else {
+  additional_genotypedata = additional_genotypedata[,c(-2)]
+}

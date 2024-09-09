@@ -21,8 +21,8 @@ library(numbers)
 
 ################## USER INPUT #############################
 # Specify the path to your input and output data files
-input_data_file = "~/genotyping/checking_samples/Input_CKAF156A2202_msp1_msp2_glurp_results.xlsx"
-output_data_file = "~/genotyping/checking_samples/Output_CKAF156A2202_msp1_msp2_glurp_results.xlsx"
+input_data_file = "~/GitRepos/STPHrepos/TES_analytics/WHO_binary_classification/Sample_input_new.xlsx"
+# output_data_file = "~/genotyping/checking_samples/Output_CKAF156A2202_msp1_msp2_glurp_results.xlsx"
 
 # Specify bin sizes for the markers
 # Allele lengths within bin sizes are considered the same
@@ -120,7 +120,7 @@ for (i in seq(1, nrow(input_data), 2)) {
   results_tab[which(results_tab$`Recrudescence_2/3` == FALSE), "Recrudescence_2/3"] = "NI"
   
   # Saving final results to file
-  write.csv(results_tab, output_data_file)
+  # write.csv(results_tab, output_data_file)
   
   
   

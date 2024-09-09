@@ -8,7 +8,7 @@ library(cluster)
 library(dplyr)
 
 # Additional functions
-setwd("/scicore/home/pothin/golmon00/GitRepos/STPHrepos/TES_analytics/Bayes_TES/Microsatellites/")
+setwd("/scicore/home/pothin/golmon00/GitRepos/STPHrepos/TES_analytics/Bayes_TES/Microsatellites/v_cluster/")
 source("define_alleles.r")
 source("calculate_frequencies3.r")
 source("recode_alleles.r")
@@ -26,41 +26,41 @@ set.seed(1)
 # Name of input file and output folder
 # If using a different file than the example, to be modified according to user's file system
 # Taking the name from the folder contents:
-list_datasets = list.files("~/GitRepos/bayesian_analysis_Uganda/datasets/", full.names = TRUE)
-args = commandArgs(TRUE)
-inputdata = list_datasets[as.integer(args[1])]
+list_datasets = list.files("~/GitRepos/bayesian_analysis_Uganda/datasets_no_additional/", full.names = TRUE)
+# args = commandArgs(TRUE)
+# inputdata = list_datasets[as.integer(args[1])]
 
-inputdata = "PPQ_63Days_simulated.xlsx"
+inputdata = "~/genotyping/tests_Bayesian/Test2.xlsx" #"PPQ_63Days_simulated.xlsx"
 # To be modified according to user's file system
-# output_folder = paste0("~/genotyping/analysis_Uganda/results_70k/", 
-#                        file_path_sans_ext(basename(inputdata)), "/")
-# dir.create(output_folder, showWarnings = FALSE)
+output_folder = paste0("~/genotyping/tests_Bayesian/", 
+                       file_path_sans_ext(basename(inputdata)), "/")
+dir.create(output_folder, showWarnings = FALSE)
 # Precision of fragment length measurement for each marker
 # (2 or 3 for capillary electrophoresis for microsatelites/msp, 10-25 for gels)
 
 # Set the bin size
-if(grepl("GLURP", inputdata)) {
-  locirepeats = c(10, 10, 50)
-} else if (grepl("TA1", inputdata) | grepl("POLY", inputdata) | 
-           grepl("PFPK2", inputdata) | grepl("TA109", inputdata) | 
-           grepl("2490", inputdata)) {
-  locirepeats = c(10, 10, 2)
-} else {
-  locirepeats = c(10, 10, 1)
-}
+# if(grepl("GLURP", inputdata)) {
+#   locirepeats = c(10, 10, 50)
+# } else if (grepl("TA1", inputdata) | grepl("POLY", inputdata) | 
+#            grepl("PFPK2", inputdata) | grepl("TA109", inputdata) | 
+#            grepl("2490", inputdata)) {
+#   locirepeats = c(10, 10, 2)
+# } else {
+#   locirepeats = c(10, 10, 1)
+# }
+
+locirepeats = c(3, 3, 3)
 
 print(paste("Processing file", inputdata))
 print("Using the bins:")
 print(locirepeats)
 ###########################
 
-##### Read in the data
-genotypedata_latefailures = read_excel(inputdata, sheet=1)
+##### read in data
 
-# Remove the patients that do not have the MSP1 or MSP2 allele
-# genotypedata_latefailures = genotypedata_latefailures %>% filter(!grepl("U03106", PatientID) & 
-#                                                                    !grepl("U03133", PatientID) &
-#                                                                    !grepl("U03166", PatientID))
+
+genotypedata_latefailures = read_excel(inputdata,sheet=1)
+genotypedata_latefailures[, 4:ncol(genotypedata_latefailures)] = as.data.frame(lapply(genotypedata_latefailures[, 4:ncol(genotypedata_latefailures)], function(x) as.numeric(as.character(x))))
 
 genotypedata_latefailures[genotypedata_latefailures == 0] = NA # missing data has to be coded as NA
 genotypedata_latefailures[genotypedata_latefailures == "0"] = NA # missing data has to be coded as NA
@@ -71,28 +71,31 @@ genotypedata_latefailures[genotypedata_latefailures == "NA"] = NA # missing data
 genotypedata_latefailures$Day[is.na(genotypedata_latefailures$Day)] = 0
 
 sampleid = paste(genotypedata_latefailures$PatientID,"D",genotypedata_latefailures$Day,sep="")
-genotypedata_latefailures = cbind(Sample.ID = sampleid, genotypedata_latefailures[,-c(1,2)])
+genotypedata_latefailures = cbind(Sample.ID = sampleid,genotypedata_latefailures[,-c(1,2)])
 ### recode sample names so that each pair has a " Day 0" and a " Day Failure"
-genotypedata_latefailures$Sample.ID = sub("D0$"," Day 0", genotypedata_latefailures$Sample.ID)
-genotypedata_latefailures$Sample.ID = sub("D[0-9]+$"," Day Failure", genotypedata_latefailures$Sample.ID)
+genotypedata_latefailures$Sample.ID = sub("D0$"," Day 0",genotypedata_latefailures$Sample.ID)
+genotypedata_latefailures$Sample.ID = sub("D[0-9]+$"," Day Failure",genotypedata_latefailures$Sample.ID)
+
 
 # each sample in genotypedata_RR has to have day 0 and day of Failure
-ids = unique(unlist(strsplit(genotypedata_latefailures$Sample.ID[grepl("Day 0",genotypedata_latefailures$Sample.ID)]," Day 0")))
+ids = unique(unlist(strsplit(genotypedata_latefailures$Sample.ID[grepl("Day 0",genotypedata_latefailures$Sample.ID), drop = FALSE]," Day 0")))
 if (sum(!paste(ids, "Day Failure") %in% genotypedata_latefailures$Sample.ID) > 0) {
   print("Error - each sample must have day 0 and day of failure data")
 }
-ids = unique(unlist(strsplit(genotypedata_latefailures$Sample.ID[grepl("Day Failure",genotypedata_latefailures$Sample.ID)]," Day Failure")))
+ids = unique(unlist(strsplit(genotypedata_latefailures$Sample.ID[grepl("Day Failure",genotypedata_latefailures$Sample.ID), drop = FALSE]," Day Failure")))
 if (sum(!paste(ids, "Day 0") %in% genotypedata_latefailures$Sample.ID) > 0) {
   print("Error - each sample must have day 0 and day of failure data")
 }
 
 additional_genotypedata = read_excel(inputdata,sheet=2)
+if (dim(additional_genotypedata)[1] > 0) {
+  sampleid = paste(additional_genotypedata$PatientID,"D",additional_genotypedata$Day,sep="")
+  additional_genotypedata = cbind(Sample.ID = sampleid,additional_genotypedata[,-c(1,2)])
+} else {
+  additional_genotypedata = additional_genotypedata[,c(-2)]
+}
 
-sampleid = paste(additional_genotypedata$PatientID,"D",additional_genotypedata$Day,sep="")
-additional_genotypedata = cbind(Sample.ID = sampleid,additional_genotypedata[,-c(1,2)])
-
-
-nruns = 70000
+nruns = 100
 record_interval = ceiling(nruns/1000);
 burnin = ceiling(nruns * 0.25);
 
@@ -113,7 +116,7 @@ for (site in site_names) {
   # source("mcmc_msp1.r")
   # Same as mcmc_msp1.r. Added here to ease debugging
   ####################
-  ids = unique(unlist(strsplit(genotypedata_RR$Sample.ID[grepl( "Day 0",genotypedata_RR$Sample.ID)]," Day 0")))
+  ids = unique(unlist(strsplit(genotypedata_RR$Sample.ID[grepl( "Day 0",genotypedata_RR$Sample.ID), drop = FALSE]," Day 0")))
   
   arbitrarydistance = 1000
   thresholddistance = 500
@@ -150,51 +153,56 @@ for (site in site_names) {
   
   temp = cbind(Sample.ID=genotypedata_RR$Sample.ID,msp1,msp2,genotypedata_RR[,grep("glurp_",colnames(genotypedata_RR))])
   
+  ###### ADDED TO CORRECT ERROR ##########
+  # temp = data_frame(temp)
+  
   ##### NORMALIZE to make sure that all 3 markers have similar mean length (so error rate applies equally to all three)
-  msp1_mean = mean(do.call(c,temp[,grepl("MSP1",colnames(temp))])%% 1000,na.rm=TRUE)
-  msp2_mean = mean(do.call(c,temp[,grepl("MSP2",colnames(temp))])%% 1000,na.rm=TRUE)
-  glurp_mean = mean(do.call(c,temp[,grepl("glurp",colnames(temp))])%% 1000,na.rm=TRUE)
-  temp[,grepl("MSP2",colnames(temp))] = round((temp[,grepl("MSP2",colnames(temp))]%% 1000)*msp1_mean/msp2_mean)+1000*(temp[,grepl("MSP2",colnames(temp))]%/% 1000)
-  temp[,grepl("glurp",colnames(temp))] = round((temp[,grepl("glurp",colnames(temp))])*msp1_mean/glurp_mean)
+  msp1_mean = mean(do.call(c,temp[,grepl("MSP1",colnames(temp)), drop = FALSE])%% 1000,na.rm=TRUE)
+  msp2_mean = mean(do.call(c,temp[,grepl("MSP2",colnames(temp)), drop = FALSE])%% 1000,na.rm=TRUE)
+  glurp_mean = mean(do.call(c,temp[,grepl("glurp",colnames(temp)), drop = FALSE])%% 1000,na.rm=TRUE)
+  temp[,grepl("MSP2",colnames(temp))] = round((temp[,grepl("MSP2",colnames(temp)), drop = FALSE]%% 1000)*msp1_mean/msp2_mean)+1000*(temp[,grepl("MSP2",colnames(temp)), drop = FALSE]%/% 1000)
+  temp[,grepl("glurp",colnames(temp))] = round((temp[,grepl("glurp",colnames(temp)), drop = FALSE])*msp1_mean/glurp_mean)
   
   genotypedata_RR=temp
   
-  
-  msp1_mad20 = sapply(1:(dim(additional_neutral)[1]), function (x) returnnonempty(additional_neutral[x,grep("MAD20",colnames(additional_neutral))]))
-  msp1_K1 = sapply(1:(dim(additional_neutral)[1]), function (x) returnnonempty(additional_neutral[x,grep("K1",colnames(additional_neutral))])+arbitrarydistance)
-  #msp1_RO33 = sapply(1:(dim(additional_neutral)[1]), function (x) returnnonempty(additional_neutral[x,grep("R033",colnames(additional_neutral))])+arbitrarydistance * 2+rnorm(1,0,sd=4))
-  msp1_RO33 = sapply(1:(dim(additional_neutral)[1]), function (x) returnnonempty(additional_neutral[x,grep("R033",colnames(additional_neutral))])+arbitrarydistance * 2)
-  msp1_all = sapply(1:(dim(additional_neutral)[1]), function (x) c(msp1_mad20[[x]],msp1_K1[[x]],msp1_RO33[[x]]))
-  
-  msp1_MOI = unlist(lapply(msp1_all,length))
-  temp = matrix(NA,(dim(additional_neutral)[1]),max(msp1_MOI))
-  sapply(which(msp1_MOI!=0), function (x) temp[x,1:(msp1_MOI[x])] <<-  msp1_all[[x]][1:(msp1_MOI[x])])
-  msp1=temp
-  colnames(msp1) = paste("MSP1_",1:max(msp1_MOI),sep="")
-  
-  msp2_3D7 = sapply(1:(dim(additional_neutral)[1]), function (x) returnnonempty(additional_neutral[x,grep("3D7",colnames(additional_neutral))]))
-  msp2_FC27 = sapply(1:(dim(additional_neutral)[1]), function (x) returnnonempty(additional_neutral[x,grep("FC27",colnames(additional_neutral))])+arbitrarydistance)
-  msp2_all = sapply(1:(dim(additional_neutral)[1]), function (x) c(msp2_3D7[[x]],msp2_FC27[[x]]))
-  
-  msp2_MOI = unlist(lapply(msp2_all,length))
-  temp = matrix(NA,(dim(additional_neutral)[1]),max(msp2_MOI))
-  sapply(which(msp2_MOI!=0), function (x) temp[x,1:(msp2_MOI[x])] <<-  msp2_all[[x]][1:(msp2_MOI[x])])
-  msp2=temp
-  colnames(msp2) = paste("MSP2_",1:max(msp2_MOI),sep="")
-  
-  colnames(additional_neutral) = gsub("glurp.","glurp_",colnames(additional_neutral))
-  
-  temp = cbind(Sample.ID=additional_neutral$Sample.ID,msp1,msp2,additional_neutral[,grep("glurp_",colnames(additional_neutral))])
-  
-  ##### NORMALIZE to make sure that all 3 markers have similar mean length (so error rate applies equally to all three)
-  msp1_mean = mean(do.call(c,temp[,grepl("MSP1",colnames(temp))])%% 1000,na.rm=TRUE)
-  msp2_mean = mean(do.call(c,temp[,grepl("MSP2",colnames(temp))])%% 1000,na.rm=TRUE)
-  glurp_mean = mean(do.call(c,temp[,grepl("glurp",colnames(temp))])%% 1000,na.rm=TRUE)
-  temp[,grepl("MSP2",colnames(temp))] = round((temp[,grepl("MSP2",colnames(temp))]%% 1000)*msp1_mean/msp2_mean)+1000*(temp[,grepl("MSP2",colnames(temp))]%/% 1000)
-  temp[,grepl("glurp",colnames(temp))] = round((temp[,grepl("glurp",colnames(temp))])*msp1_mean/glurp_mean)
-  
-  additional_neutral=temp
-  
+  if ((dim(additional_neutral)[1])>0) {
+    msp1_mad20 = sapply(1:(dim(additional_neutral)[1]), function (x) returnnonempty(additional_neutral[x,grep("MAD20",colnames(additional_neutral))]))
+    msp1_K1 = sapply(1:(dim(additional_neutral)[1]), function (x) returnnonempty(additional_neutral[x,grep("K1",colnames(additional_neutral))])+arbitrarydistance)
+    #msp1_RO33 = sapply(1:(dim(additional_neutral)[1]), function (x) returnnonempty(additional_neutral[x,grep("R033",colnames(additional_neutral))])+arbitrarydistance * 2+rnorm(1,0,sd=4))
+    msp1_RO33 = sapply(1:(dim(additional_neutral)[1]), function (x) returnnonempty(additional_neutral[x,grep("R033",colnames(additional_neutral))])+arbitrarydistance * 2)
+    msp1_all = sapply(1:(dim(additional_neutral)[1]), function (x) c(msp1_mad20[[x]],msp1_K1[[x]],msp1_RO33[[x]]))
+    
+    msp1_MOI = unlist(lapply(msp1_all,length))
+    temp = matrix(NA,(dim(additional_neutral)[1]),max(msp1_MOI))
+    sapply(which(msp1_MOI!=0), function (x) temp[x,1:(msp1_MOI[x])] <<-  msp1_all[[x]][1:(msp1_MOI[x])])
+    msp1=temp
+    colnames(msp1) = paste("MSP1_",1:max(msp1_MOI),sep="")
+    
+    msp2_3D7 = sapply(1:(dim(additional_neutral)[1]), function (x) returnnonempty(additional_neutral[x,grep("3D7",colnames(additional_neutral))]))
+    msp2_FC27 = sapply(1:(dim(additional_neutral)[1]), function (x) returnnonempty(additional_neutral[x,grep("FC27",colnames(additional_neutral))])+arbitrarydistance)
+    msp2_all = sapply(1:(dim(additional_neutral)[1]), function (x) c(msp2_3D7[[x]],msp2_FC27[[x]]))
+    
+    msp2_MOI = unlist(lapply(msp2_all,length))
+    temp = matrix(NA,(dim(additional_neutral)[1]),max(msp2_MOI))
+    sapply(which(msp2_MOI!=0), function (x) temp[x,1:(msp2_MOI[x])] <<-  msp2_all[[x]][1:(msp2_MOI[x])])
+    msp2=temp
+    colnames(msp2) = paste("MSP2_",1:max(msp2_MOI),sep="")
+    
+    colnames(additional_neutral) = gsub("glurp.","glurp_",colnames(additional_neutral))
+    
+    temp = cbind(Sample.ID=additional_neutral$Sample.ID,msp1,msp2,additional_neutral[,grep("glurp_",colnames(additional_neutral))])
+    
+    ##### NORMALIZE to make sure that all 3 markers have similar mean length (so error rate applies equally to all three)
+    msp1_mean = mean(do.call(c,temp[,grepl("MSP1",colnames(temp)), drop = FALSE])%% 1000,na.rm=TRUE)
+    msp2_mean = mean(do.call(c,temp[,grepl("MSP2",colnames(temp)), drop = FALSE])%% 1000,na.rm=TRUE)
+    glurp_mean = mean(do.call(c,temp[,grepl("glurp",colnames(temp)), drop = FALSE])%% 1000,na.rm=TRUE)
+    temp[,grepl("MSP2",colnames(temp))] = round((temp[,grepl("MSP2",colnames(temp)), drop = FALSE]%% 1000)*msp1_mean/msp2_mean)+1000*(temp[,grepl("MSP2",colnames(temp)), drop = FALSE]%/% 1000)
+    temp[,grepl("glurp",colnames(temp))] = round((temp[,grepl("glurp",colnames(temp)), drop = FALSE])*msp1_mean/glurp_mean)
+    
+    additional_neutral=temp
+  } else {
+    additional_neutral = genotypedata_RR[FALSE,]
+  }
   
   locinames = unique(sapply(colnames(genotypedata_RR)[-1],function(x) strsplit(x,"_")[[1]][1]))
   nloci = length(locinames)
@@ -214,8 +222,8 @@ for (site in site_names) {
   for (i in 1:nids) {
     for (j in 1:nloci) {
       locicolumns = grepl(paste(locinames[j],"_",sep=""),colnames(genotypedata_RR))
-      nalleles0 = sum(!is.na(genotypedata_RR[grepl(paste("^",ids[i]," Day 0",sep=""),genotypedata_RR$Sample.ID),locicolumns]))
-      nallelesf = sum(!is.na(genotypedata_RR[grepl(paste("^",ids[i]," Day Failure",sep=""),genotypedata_RR$Sample.ID),locicolumns]))
+      nalleles0 = sum(!is.na(genotypedata_RR[grepl(paste("^",ids[i]," Day 0",sep=""),genotypedata_RR$Sample.ID),locicolumns, drop = FALSE]))
+      nallelesf = sum(!is.na(genotypedata_RR[grepl(paste("^",ids[i]," Day Failure",sep=""),genotypedata_RR$Sample.ID),locicolumns, drop = FALSE]))
       
       MOI0[i] = max(MOI0[i],nalleles0)
       MOIf[i] = max(MOIf[i],nallelesf)
@@ -238,9 +246,7 @@ for (site in site_names) {
   hiddenf = matrix(NA,nids,maxMOI*nloci)
   hidden_crossfamilyf = matrix(NA,nids,maxMOI*nloci)
   recrf = matrix(NA,nids,nloci)
-  if (length(additional_neutral) > 0) { if (dim(additional_neutral)[1] > 0) {
-    recoded_additional_neutral = matrix(0,dim(additional_neutral)[1],maxMOI*nloci)
-  }}
+  recoded_additional_neutral = matrix(0,dim(additional_neutral)[1],maxMOI*nloci)
   mindistance = matrix(0,nids,nloci)
   alldistance = array(NA,c(nids,nloci,maxMOI*maxMOI))
   allrecrf = array(NA,c(nids,nloci,maxMOI*maxMOI))
@@ -265,41 +271,40 @@ for (site in site_names) {
     oldalleles[is.na(oldalleles)] = 0
     
     oldalleles[newalleles == 0] = 0
-    alleles0[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(oldalleles)[2])] = oldalleles[grepl("Day 0",genotypedata_RR$Sample.ID),]
-    allelesf[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(oldalleles)[2])] = oldalleles[grepl("Day Failure",genotypedata_RR$Sample.ID),]
-    recoded0[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(newalleles)[2])] = newalleles[grepl("Day 0",genotypedata_RR$Sample.ID),]
-    recodedf[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(newalleles)[2])] = newalleles[grepl("Day Failure",genotypedata_RR$Sample.ID),]
+    alleles0[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(oldalleles)[2])] = oldalleles[grepl("Day 0",genotypedata_RR$Sample.ID), drop = FALSE]
+    allelesf[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(oldalleles)[2])] = oldalleles[grepl("Day Failure",genotypedata_RR$Sample.ID), drop = FALSE]
+    recoded0[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(newalleles)[2])] = newalleles[grepl("Day 0",genotypedata_RR$Sample.ID), drop = FALSE]
+    recodedf[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(newalleles)[2])] = newalleles[grepl("Day Failure",genotypedata_RR$Sample.ID), drop = FALSE]
     
   }
   
   
-  # 
-  # if (length(additional_neutral) > 0) { if (dim(additional_neutral)[1] > 0) {
-  # recoded_additional_neutral = matrix(0,dim(additional_neutral)[1],maxMOI*nloci)
-  # ##### recode additional_neutral
-  # for (j in 1:nloci) {
-  # 	locus = locinames[j]
-  # 	locicolumns = grepl(paste(locus,"_",sep=""),colnames(genotypedata_RR))
-  # 	oldalleles = as.vector(additional_neutral[,locicolumns])
-  # 	if (length(dim(oldalleles)[2]) == 0) {
-  # 		oldalleles = matrix(oldalleles,length(oldalleles),1)
-  # 	}
-  # 	newalleles = oldalleles
-  # 	ncolumns = dim(oldalleles)[2]
-  # 	for (i in 1:ncolumns) {
-  # 		newalleles[,i] = (sapply(1:dim(oldalleles)[1],function (x) recodeallele(alleles_definitions_RR[[j]],oldalleles[x,i])))
-  # 	}
-  # 	newalleles = matrix(as.numeric(unlist(c(newalleles))),dim(newalleles)[1],dim(newalleles)[2])
-  # 	newalleles[is.na(newalleles)] = 0
-  # 	oldalleles = matrix(as.numeric(unlist(c(oldalleles))),dim(oldalleles)[1],dim(oldalleles)[2])
-  # 	oldalleles[is.na(oldalleles)] = 0
-  # 
-  # 	oldalleles[newalleles == 0] = 0
-  # 	recoded_additional_neutral[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(oldalleles)[2])] = newalleles
-  # }
-  # } else {
-  # 	recoded_additional_neutral = c()
-  # }}
+  if (dim(additional_neutral)[1] > 0) {
+    recoded_additional_neutral = matrix(0,dim(additional_neutral)[1],maxMOI*nloci)
+    ##### recode additional_neutral
+    for (j in 1:nloci) {
+      locus = locinames[j]
+      locicolumns = grepl(paste(locus,"_",sep=""),colnames(additional_neutral))
+      oldalleles = as.vector(additional_neutral[,locicolumns])
+      if (length(dim(oldalleles)[2]) == 0) {
+        oldalleles = matrix(oldalleles,length(oldalleles),1)
+      }
+      newalleles = oldalleles
+      ncolumns = dim(oldalleles)[2]
+      for (i in 1:ncolumns) {
+        newalleles[,i] = (sapply(1:dim(oldalleles)[1],function (x) recodeallele(alleles_definitions_RR[[j]],oldalleles[x,i])))
+      }
+      newalleles = matrix(as.numeric(unlist(c(newalleles))),dim(newalleles)[1],dim(newalleles)[2])
+      newalleles[is.na(newalleles)] = 0
+      oldalleles = matrix(as.numeric(unlist(c(oldalleles))),dim(oldalleles)[1],dim(oldalleles)[2])
+      oldalleles[is.na(oldalleles)] = 0
+      
+      oldalleles[newalleles == 0] = 0
+      recoded_additional_neutral[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(oldalleles)[2])] = newalleles
+    }
+  } else {
+    recoded_additional_neutral = recodedf[FALSE,]
+  }
   
   ## estimate frequencies
   
@@ -351,7 +356,7 @@ for (site in site_names) {
         possible_hidden_index0 = which(mode_allele_lengths[[j]] %in% pairwisecomp[which(abs(pairwisecomp[,1]-pairwisecomp[,2])<500),2])
       }
       if (nmissing0 > 0) {
-        if (length(possible_hidden_index0)>1) { 
+        if (length(possible_hidden_index0)>1) {
           newhiddenalleles0 = sample(possible_hidden_index0,nmissing0,replace=TRUE,frequencies_RR[[2]][j,possible_hidden_index0])
         } else {
           newhiddenalleles0 = as.numeric(as.character(sample(as.factor(possible_hidden_index0),nmissing0,replace=TRUE,frequencies_RR[[2]][j,possible_hidden_index0])))
@@ -584,21 +589,21 @@ for (site in site_names) {
   outputmatrix = cbind(temp_combined,modealleles)
   colnames(outputmatrix) = c("Prob Rec",c(sapply(1:nloci, function (x) paste(locinames[x],"_",1:maxMOI,sep=""))))
   hist(as.numeric(temp_combined))
-  write.csv(outputmatrix, paste(output_folder, jobname, "_posterior",".csv",sep=""))
+  write.csv(outputmatrix,paste(output_folder, "/", jobname,"_posterior",".csv",sep=""))
   
   
   # summary statistics of parameters
-  write.csv(state_parameters,paste(output_folder, jobname,"_state_parameters",".csv",sep=""))
+  write.csv(state_parameters,paste(output_folder, "/", jobname,"_state_parameters",".csv",sep=""))
   
   summary_statisticsmatrix = cbind(format(rowMeans(state_parameters),digits=2),
                                    apply(format(t(sapply(1:dim(state_parameters)[1], function (x) quantile(state_parameters[x,],c(0.25,0.75)))),digits=2),1, function (x) paste(x,collapse="?")))
   summary_statisticsmatrix = rbind(summary_statisticsmatrix, c(format(mean(state_parameters[(3+nloci):(3+2*nloci-1),]),digits = 2),paste(format(quantile(state_parameters[(3+nloci):(3+2*nloci-1),],c(0.25,0.75)),digits=2),collapse="?")))
   summary_statisticsmatrix = as.matrix(sapply(1:dim(summary_statisticsmatrix)[1], function (x) paste(summary_statisticsmatrix[x,1], " (",summary_statisticsmatrix[x,2],")",sep="")))
   rownames(summary_statisticsmatrix) = c("q","q_crossfamily","d",locinames,locinames,"Mean diversity")
-  write.csv(summary_statisticsmatrix, paste(output_folder, jobname,"_summarystatistics",".csv",sep=""))
+  write.csv(summary_statisticsmatrix,paste(output_folder, "/", jobname,"_summarystatistics",".csv",sep=""))
   
   
-  ########################
+  #####################################################################################
   state_classification_all = rbind(state_classification_all,state_classification)
   state_parameters_all = rbind(state_parameters_all,state_parameters)
   ids_all = c(ids_all,ids)
