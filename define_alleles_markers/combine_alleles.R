@@ -18,7 +18,7 @@ merge_alleles = function(allele_vector, bin_size) {
   allele_values = round((breaks[2:length(breaks)] + breaks[1:(length(breaks) - 1)]) / 2)
   hist_alleles = hist(allele_vector, breaks = breaks, plot = FALSE)
   
-  counts_by_offset = sapply(1:bin_size, function (x) sum(hist_alleles$counts[seq(from = x, to = length(hist_alleles$counts), by = bin_size)]))
+  counts_by_offset = sapply(1:min(length(hist_alleles$counts), bin_size), function (x) sum(hist_alleles$counts[seq(from = x, to = length(hist_alleles$counts), by = bin_size)]))
   possible_alleles = allele_values[seq(from = which.max(counts_by_offset), to = length(allele_values), by = bin_size)]
   
   if (min(allele_vector) <= (min(possible_alleles) - bin_size/2)) {
