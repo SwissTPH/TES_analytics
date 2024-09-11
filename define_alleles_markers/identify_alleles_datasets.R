@@ -18,6 +18,8 @@ source("~/GitRepos/STPHrepos/TES_analytics/define_alleles_markers/combine_allele
 data_folder = "~/GitRepos/STPHrepos/TES_analytics/define_alleles_markers/"
 # Folder to save the results
 folder_output = "~/genotyping/tests_alleles/"
+#########################
+
 
 # Initialization
 final_table = NULL
@@ -26,7 +28,7 @@ list_data = list.files(data_folder, full.names = TRUE, pattern = ".xlsx")
 # Build the long data table with all the alleles
 for (f in list_data) {
   # Extracts the marker name based on the data file name, assuming 
-  # the naming convention is MSP_marker
+  # the naming convention is MSP_marker_name
   marker_name = sub("MSP_(.*)\\.xlsx", "\\1", basename(f))
   data_alleles = read_excel(f, sheet = "RecurrentInfections")
   
@@ -46,10 +48,10 @@ for (f in list_data) {
 list_markers = unique(final_table$allele_id)
 merged_allele_table = NULL
 for (marker_name in unique(list_markers)) {
-  print(marker_name)
+  print(paste("Processing for marker", marker_name))
   
   marker_drug_tab = final_table %>% dplyr::filter(allele_id == marker_name)
-  allele_vector = marker_drug_tab %>% select(allele_length)
+  allele_vector = marker_drug_tab %>% dplyr::select(allele_length)
   bin_size = marker_bins %>% 
     dplyr::filter(marker_id == marker_name) %>% 
     select(bin_size)
