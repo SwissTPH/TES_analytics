@@ -19,10 +19,34 @@ library(coda)
 library(future)
 library(future.apply)
 library(abind)
+library(gtools)
+library(readxl)
+library(kableExtra)
 ```
 
 
-# Data importation and cleaning
+# User defined input
+
+```{r}
+# Define the number of chains you want to run
+n_chains <- 4 
+
+#  Automated MCMC Control Parameters
+R_hat_threshold <- 1.01
+ESS_threshold <- 400
+chunk_size <- 2000
+max_iterations <- 10000
+burn_in_frac <- 0.25
+
+# this is the size of the repeat region for each microsatellite (ie. for dimers use 2, for trimers use 3)
+locirepeats = c(2,2,3,3,3,3,3)
+
+# this is the tolerance for each marker, used during match counting
+bin_sizes = c(0,0,0,0,0,0,0)
+```
+
+
+# Data importation and cleaning for Bayesian
 
 ```{r pressure, echo=FALSE}
 # input file
@@ -35,11 +59,12 @@ options(java.parameters = "-Xmx4096m")
 ##### read in data
 genotypedata_latefailures = as.data.frame(read_excel(inputfile, sheet = "Late Treatment Failures",skip=3))
   
-genotypedata_latefailures[genotypedata_latefailures == 0] = NA # missing data has to be coded as NA
-genotypedata_latefailures[genotypedata_latefailures == "0"] = NA # missing data has to be coded as NA
-genotypedata_latefailures[genotypedata_latefailures == "N/A"] = NA # missing data has to be coded as NA
-genotypedata_latefailures[genotypedata_latefailures == "-"] = NA # missing data has to be coded as NA
-genotypedata_latefailures[genotypedata_latefailures == "NA"] = NA # missing data has to be coded as NA
+# missing data has to be coded as NA
+genotypedata_latefailures[genotypedata_latefailures == 0] = NA
+genotypedata_latefailures[genotypedata_latefailures == "0"] = NA 
+genotypedata_latefailures[genotypedata_latefailures == "N/A"] = NA 
+genotypedata_latefailures[genotypedata_latefailures == "-"] = NA 
+genotypedata_latefailures[genotypedata_latefailures == "NA"] = NA 
 
 ### recode sample names so that each pair has a " Day 0" and a " Day Failure"
 genotypedata_latefailures$Sample.ID = sub("D0$"," Day 0",genotypedata_latefailures$Sample.ID)
@@ -59,7 +84,8 @@ if (sum(!paste(ids, "Day 0") %in% genotypedata_latefailures$Sample.ID) > 0) {
 ### background samples (from "Additional" tab)
   additional_genotypedata = as.data.frame(read_excel(inputfile, sheet = "Additional",skip=3))
   if (dim(additional_genotypedata)[1] > 0) { 
-    additional_genotypedata[additional_genotypedata == 0] = NA # missing data has to be coded as NA
+    # missing data has to be coded as NA
+    additional_genotypedata[additional_genotypedata == 0] = NA 
     additional_genotypedata[additional_genotypedata == "0"] = NA
     additional_genotypedata[additional_genotypedata == "N/A"] = NA
     additional_genotypedata[additional_genotypedata == "-"] = NA
@@ -74,13 +100,10 @@ if (sum(!paste(ids, "Day 0") %in% genotypedata_latefailures$Sample.ID) > 0) {
 ```
 
 
-# Bayesian Approach
+# Bayesian approach functions
 
 ```{r}
-
-# this is the size of the repeat region for each microsatellite (ie. for dimers use 2, for trimers use 3)
-locirepeats = c(2,2,3,3,3,3,3)
-
+# Recode allele function
 recodeallele = function(alleles_definitions_subset,proposed) {
 	
 	ret = which(proposed > alleles_definitions_subset[,1] & proposed <= alleles_definitions_subset[,2])
@@ -103,8 +126,7 @@ nloci = length(locinames)
 MOI0 = rep(0,nids)
 MOIf = rep(0,nids)
 
-# for each individual,
-# cycle through each locus and count number of separate alleles
+# for each individual, cycle through each locus and count number of separate alleles
 
 for (i in 1:nids) {
 	for (j in 1:nloci) {
@@ -567,6 +589,7 @@ switch_hidden = function(x, hidden0, hiddenf, recoded0, recodedf, alleles0, alle
 # call sourece for MCMC Diagnosis
 source("mcmc_report_generator.R")
 
+# Define the chain function for parallel processing
 run_one_chain <- function(chain_id,
                           nruns, burnin, record_interval,
                           nids, nloci, maxMOI, locinames,
@@ -591,7 +614,8 @@ run_one_chain <- function(chain_id,
     }
   }
   
-  ##### define statevector and create state 0
+  ##### define state vector and create state 0
+  
   alleles0 <- matrix(0, nids, maxMOI * nloci)
   recoded0 <- matrix(0, nids, maxMOI * nloci)
   hidden0 <- matrix(NA, nids, maxMOI * nloci)
@@ -601,7 +625,7 @@ run_one_chain <- function(chain_id,
   recodedf <- matrix(0, nids, maxMOI * nloci)
   hiddenf <- matrix(NA, nids, maxMOI * nloci)
   recrf <- matrix(NA, nids, nloci)
-  recr_repeatsf <- matrix(NA, nids, nloci) # FIX: This line was added back in.
+  recr_repeatsf <- matrix(NA, nids, nloci) 
   if (length(additional_neutral) > 0 && nrow(additional_neutral) > 0) {
     recoded_additional_neutral <- matrix(0, nrow(additional_neutral), maxMOI * nloci)
   }
@@ -610,7 +634,7 @@ run_one_chain <- function(chain_id,
   allrecrf <- array(NA, c(nids, nloci, maxMOI * maxMOI))
   classification <- rep(0, nids)
   
-  # (The original data processing block to create state 0 is here)
+
   for (j in 1:nloci) {
       locus = locinames[j]
       locicolumns = grepl(paste0(locus, "_"), colnames(genotypedata_RR))
@@ -652,7 +676,7 @@ run_one_chain <- function(chain_id,
       }
   } else { recoded_additional_neutral = c() }
   
-  ##### Finish initialization for the current chain
+
   frequencies_RR <- calculate_frequencies3(rbind(genotypedata_RR, additional_neutral), alleles_definitions_RR)
   
   ## assign random hidden alleles and classifications
@@ -682,6 +706,7 @@ run_one_chain <- function(chain_id,
   dvect <- dgeom(0:(round(max(sapply(1:nloci, function(x) diff(range(c(alleles_definitions_RR[[x]]))))))), 0.75)
   
   ## randomly assign recrudescences/reinfections for this chain
+  
   classification <- ifelse(runif(nids) < 0.5, 1, 0)
   for (i in 1:nids) {
     for (j in 1:nloci) {
@@ -714,9 +739,8 @@ run_one_chain <- function(chain_id,
   count <- 1
   dposterior <- 0.75
 
-  # MCMC RUNNER FUNCTION (Closure) - This remains unchanged
   
-  # IN MAIN SCRIPT, INSIDE run_one_chain
+  # Define MCMC function
 
   runmcmc <- function() {
     calculate_single_locus <- function(x, y) {
@@ -729,16 +753,16 @@ run_one_chain <- function(chain_id,
       message("Reason: No valid distances found. All calculations for this locus will be skipped.")
       message(sprintf("Length of dvect: %d", length(dvect)))
       message("Distances found (includes NAs and out-of-bounds values):")
-      print(head(distances, 20)) # Print the first 20 distances to inspect them
+      print(head(distances, 20)) 
     }
-    return(1) # Return the neutral value
+    return(1)
   }
   numerator <- dvect[distances[valid] + 1]
 
   denominators <- sapply(which(valid), function(z) {
     recr_allele <- allrecrf[x, y, z]
     if (is.na(recr_allele)) {
-      return(NA) # If the allele is missing, this path cannot be evaluated.
+      return(NA) 
     }
     sum(
       frequencies_RR[[2]][y, 1:frequencies_RR[[1]][y]] *
@@ -758,7 +782,7 @@ run_one_chain <- function(chain_id,
       message("Numerator(s) calculated:")
       print(head(numerator, 20))
       message("Denominator(s) calculated (before adding epsilon):")
-      print(head(denominators, 20)) # This will likely show a vector of NAs
+      print(head(denominators, 20)) 
     }
     return(1) 
   }
@@ -786,7 +810,7 @@ run_one_chain <- function(chain_id,
       alleles_definitions_RR = alleles_definitions_RR, frequencies_RR = frequencies_RR,
       correction_distance_matrix = correction_distance_matrix
     )
-    # Re-assign all the modified state variables using '<<-'
+    
     hidden0       <<- updated_states$hidden0
     hiddenf       <<- updated_states$hiddenf
     recoded0      <<- updated_states$recoded0
@@ -859,42 +883,18 @@ run_one_chain <- function(chain_id,
     locus_index = locus_idx,
     tempdata = full_data,
     maxMOI = maxMOI,
-    frequencies_RR = frequencies_RR # Pass the current state in
+    frequencies_RR = frequencies_RR
   )
 
 
   frequencies_RR <<- updated_frequencies
         }
-  # if(count %% 100 == 0) {
-  #   message(sprintf("Count %d: NA ratios: %d, Min ratio: %.3f, Max ratio: %.3f",
-  #                  count,
-  #                  sum(is.na(likelihoodratio)),
-  #                  min(likelihoodratio, na.rm=TRUE),
-  #                  max(likelihoodratio, na.rm=TRUE)))
-  # }    
-    
   count <<- count + 1
 }
     
   # Execute the MCMC for the current chain - This remains unchanged
   replicate(nruns, runmcmc())
   
-  # --- [END of code to copy from your original loop] ---
-
-  # message(sprintf("  PID %d: Finished Chain %d.", Sys.getpid(), chain_id))
-  # 
-  # message(sprintf("---------- DEBUGGING CHAIN %d ----------", chain_id))
-  # message("Summary of the recorded log-likelihood trace:")
-  # print(summary(state_loglikelihood))
-  # 
-  # # This line is the most important one. If it prints 1, our theory is correct.
-  # message(sprintf("Number of unique log-likelihood values: %d", 
-  #                 length(unique(na.omit(state_loglikelihood)))))
-  # 
-  # message("First 10 values of the trace:")
-  # print(head(state_loglikelihood, 10))
-  # message("--------------------------------------")
-  # 
   
   return(
     list(
@@ -909,46 +909,26 @@ run_one_chain <- function(chain_id,
 }  
   
 
-### =========================================================================
-###      FINAL, CLEAN AUTOMATED MCMC SCRIPT
-### =========================================================================
-
-# --- Prerequisites ---
-library(coda)
-library(future)
-library(future.apply)
-library(abind) # Needed for 3D array manipulation
-
-# --- 1. Define Core MCMC and Data Parameters ---
+# Define Core MCMC and Data Parameters
 site_names <- unique(genotypedata_latefailures$Site)
-n_chains <- 4 
 
-# --- 2. Automated MCMC Control Parameters ---
-R_HAT_THRESHOLD <- 1.01
-ESS_THRESHOLD <- 400
-CHUNK_SIZE <- 2000
-MAX_ITERATIONS <- 10000 # Using 10k for faster testing, can increase later
-BURN_IN_FRAC <- 0.25
-
-# --- 3. Global Storage for Aggregating Results ACROSS ALL SITES ---
+# Global Storage for Aggregating Results ACROSS ALL SITES 
 all_sites_classification <- list()
 all_sites_parameters <- list()
-all_sites_alleles0 <- list() # Added for completeness
-all_sites_allelesf <- list() # Added for completeness
+all_sites_alleles0 <- list() 
+all_sites_allelesf <- list() 
 all_sites_ids <- list()
 
-# --- 4. Configure Parallel Plan (Once, for efficiency) ---
+# Configure Parallel Plan (Once, for efficiency)
 plan(multisession, workers = n_chains)
-message(sprintf("Parallel backend configured with %d workers.", nbrOfWorkers()))
 
-### =========================================================================
-###      MAIN ANALYSIS LOOP STARTS HERE
-### =========================================================================
+
+# Loop per site analysis
+
 for (site in site_names) {
     jobname <- site
-    cat(sprintf("\n--- Starting Automated Analysis for Site: %s ---\n", site))
     
-    # --- Site-Specific Data Preparation ---
+    # Site-Specific Data Preparation
     start_time_site <- Sys.time()
     genotypedata_RR <- genotypedata_latefailures[genotypedata_latefailures$Site == site, -c(2)]
     additional_neutral <- additional_genotypedata[additional_genotypedata$Site == site, -c(2)]
@@ -962,19 +942,19 @@ for (site in site_names) {
     k = rep(maxalleles, nloci)
     alleles_definitions_RR  = define_alleles(rbind(genotypedata_RR,additional_neutral),locirepeats,k)
     
-    # --- Automated MCMC Loop ---
+    # Automated MCMC Loop
     full_loglik_history <- list()
     full_chain_results <- list()  
     total_iterations <- 0
     converged <- FALSE
     
-    while (!converged && total_iterations < MAX_ITERATIONS) {
-        total_iterations <- total_iterations + CHUNK_SIZE
-        cat(sprintf("Running chunk: Iterations %d to %d...\n", total_iterations - CHUNK_SIZE + 1, total_iterations))
+    while (!converged && total_iterations < max_iterations) {
+        total_iterations <- total_iterations + chunk_size
+        cat(sprintf("Running chunk: Iterations %d to %d...\n", total_iterations - chunk_size + 1, total_iterations))
         
         chunk_results <- future_lapply(1:n_chains, function(id) {
             run_one_chain(
-                chain_id = id, nruns = CHUNK_SIZE, burnin = 0, record_interval = 10,
+                chain_id = id, nruns = chunk_size, burnin = 0, record_interval = 10,
                 nids = nids, nloci = nloci, maxMOI = maxMOI, locinames = locinames,
                 genotypedata_RR = genotypedata_RR, 
                 additional_neutral = additional_neutral, 
@@ -992,14 +972,11 @@ for (site in site_names) {
                 full_chain_results[[i]]$classification <- cbind(full_chain_results[[i]]$classification, chunk_results[[i]]$classification)
                 full_chain_results[[i]]$alleles0 <- abind(full_chain_results[[i]]$alleles0, chunk_results[[i]]$alleles0, along = 3)
                 full_chain_results[[i]]$allelesf <- abind(full_chain_results[[i]]$allelesf, chunk_results[[i]]$allelesf, along = 3)
-                
-                # *** THIS IS THE CRITICAL FIX ***
-                # Correctly append to the i-th element of the list, not the whole list
                 full_loglik_history[[i]] <- c(full_loglik_history[[i]], chunk_results[[i]]$loglikelihood)
             }
         }
         
-        # --- Robust Convergence Check ---
+        # Robust Convergence Check
         if (length(full_loglik_history) == 0 || length(full_loglik_history[[1]]) == 0) {
             cat("Log-likelihood history is not populated yet. Running another chunk...\n")
             next
@@ -1007,7 +984,7 @@ for (site in site_names) {
         
         mcmc_list_loglik <- coda::mcmc.list(lapply(full_loglik_history, coda::mcmc))
         n_samples <- nrow(mcmc_list_loglik[[1]])
-        burn_in_end <- floor(BURN_IN_FRAC * n_samples)
+        burn_in_end <- floor(burn_in_frac * n_samples)
         
         if (is.null(n_samples) || (n_samples - burn_in_end < 50)) { next }
         
@@ -1016,29 +993,28 @@ for (site in site_names) {
         ess <- try(coda::effectiveSize(post_burn_mcmc)[1], silent = TRUE)
         
         if (inherits(r_hat, "try-error") || inherits(ess, "try-error")) { next }
-        r_hat_ok <- !is.na(r_hat) && r_hat < R_HAT_THRESHOLD
-        ess_ok <- !is.na(ess) && ess > ESS_THRESHOLD
+        r_hat_ok <- !is.na(r_hat) && r_hat < R_hat_threshold
+        ess_ok <- !is.na(ess) && ess > ESS_threshold
         
         cat(sprintf("--- Convergence Check (Log-Likelihood Only) ---\n"))
-        cat(sprintf("  R-hat: %.4f (Threshold: < %.2f) -> %s\n", r_hat, R_HAT_THRESHOLD, ifelse(r_hat_ok, "OK", "FAIL")))
-        cat(sprintf("  ESS:   %.1f (Threshold: > %d) -> %s\n", ess, ESS_THRESHOLD, ifelse(ess_ok, "OK", "FAIL")))
+        cat(sprintf("  R-hat: %.4f (Threshold: < %.2f) -> %s\n", r_hat, R_hat_threshold, ifelse(r_hat_ok, "OK", "FAIL")))
+        cat(sprintf("  ESS:   %.1f (Threshold: > %d) -> %s\n", ess, ESS_threshold, ifelse(ess_ok, "OK", "FAIL")))
         
         if (r_hat_ok && ess_ok) {
             converged <- TRUE
             cat(sprintf("\nSUCCESS: Model for site '%s' CONVERGED after %d total iterations.\n", site, total_iterations))
-        } else if (total_iterations >= MAX_ITERATIONS) {
-            cat(sprintf("\nWARNING: Model for site '%s' FAILED TO CONVERGE after reaching max iterations.\n", site, MAX_ITERATIONS))
+        } else if (total_iterations >= max_iterations) {
+            cat(sprintf("\nWARNING: Model for site '%s' FAILED TO CONVERGE after reaching max iterations.\n", site, max_iterations))
         }
-    } # End of 'while' loop
+    }
 
-    # --- Post-processing and Saving Results for the CURRENT SITE ---
+    # Post-processing and Saving Results for the CURRENT SITE
     num_total_samples_per_chain <- ifelse(length(full_chain_results) > 0, ncol(full_chain_results[[1]]$parameters), 0)
     if (num_total_samples_per_chain == 0) {
-        cat(sprintf("WARNING: No samples generated for site '%s'. Skipping analysis.\n", site))
         next
     }
     
-    burn_in_samples_per_chain <- floor(BURN_IN_FRAC * num_total_samples_per_chain)
+    burn_in_samples_per_chain <- floor(burn_in_frac * num_total_samples_per_chain)
     if (burn_in_samples_per_chain >= num_total_samples_per_chain) {
         cat(sprintf("WARNING: Burn-in resulted in 0 samples for site '%s'. Skipping analysis.\n", site))
         next
@@ -1075,8 +1051,6 @@ for (site in site_names) {
     outputmatrix <- cbind(temp_combined, modealleles)
     colnames(outputmatrix) <- c("Prob Rec", sapply(1:nloci, function(x) paste(locinames[x], "_", 1:maxMOI, sep = "")))
     write.csv(outputmatrix, paste(jobname, "_posterior", ".csv", sep = ""))
-
-    # *** CORRECTION 2: USING 'final_parameters' INSTEAD OF 'combined_parameters' ***
     write.csv(final_parameters, paste(jobname, "_state_parameters.csv", sep = ""))
     summary_statisticsmatrix <- cbind(
         format(rowMeans(final_parameters), digits = 2),
@@ -1091,7 +1065,6 @@ for (site in site_names) {
     rownames(summary_statisticsmatrix) <- c("q", "d", locinames, locinames, "Mean diversity")
     write.csv(summary_statisticsmatrix, paste(jobname, "_summarystatistics.csv", sep = ""))
 
-    # --- Aggregate Results for Final Summary ---
     all_sites_classification[[site]] <- final_classification
     all_sites_parameters[[site]] <- final_parameters
     all_sites_alleles0[[site]] <- final_alleles0
@@ -1100,8 +1073,6 @@ for (site in site_names) {
 
     end_time_site <- Sys.time()
     runtime <- end_time_site - start_time_site
-    message(sprintf("Total runtime for site '%s': %s", site, runtime))
-    
 } 
 plan(sequential)
 
@@ -1154,17 +1125,16 @@ probability_of_recrudescence_correctorder2[is.na(probability_of_recrudescence_co
 ### Match-counting Analysis
 
 ```{r, include = FALSE}
-library(gtools)
-library(readxl)
-
 ##### read in data
 
 genotypedata_latefailures = as.data.frame(read_excel(inputfile, sheet = "Late Treatment Failures",skip=3))
-genotypedata_latefailures[genotypedata_latefailures == 0] = NA # missing data has to be coded as NA
-genotypedata_latefailures[genotypedata_latefailures == "0"] = NA # missing data has to be coded as NA
-genotypedata_latefailures[genotypedata_latefailures == "N/A"] = NA # missing data has to be coded as NA
-genotypedata_latefailures[genotypedata_latefailures == "-"] = NA # missing data has to be coded as NA
-genotypedata_latefailures[genotypedata_latefailures == "NA"] = NA # missing data has to be coded as NA
+
+# missing data has to be coded as NA
+genotypedata_latefailures[genotypedata_latefailures == 0] = NA 
+genotypedata_latefailures[genotypedata_latefailures == "0"] = NA 
+genotypedata_latefailures[genotypedata_latefailures == "N/A"] = NA
+genotypedata_latefailures[genotypedata_latefailures == "-"] = NA
+genotypedata_latefailures[genotypedata_latefailures == "NA"] = NA
 
 ### recode sample names so that each pair has a " Day 0" and a " Day Failure"
 genotypedata_latefailures$Sample.ID = sub("D0$"," Day 0",genotypedata_latefailures$Sample.ID)
@@ -1181,9 +1151,6 @@ ids = unique(unlist(strsplit(genotypedata_latefailures$Sample.ID[grepl("Day Fail
 if (sum(!paste(ids, "Day 0") %in% genotypedata_latefailures$Sample.ID) > 0) {
   print("Error - each sample must have day 0 and day of failure data")
 }
-
-# this is the tolerance for each marker, used during match counting
-bin_sizes = c(0,0,0,0,0,0,0)
 
 
 ids = unique(unlist(strsplit(genotypedata_latefailures$Sample.ID[grepl("Day 0",genotypedata_latefailures$Sample.ID)]," Day 0")))
@@ -1269,9 +1236,6 @@ for (i in 1:nids) {
 output_table = cbind(genotypedata_latefailures,match_output,"Number of Matches" = c(rbind(number_matches, rep("",nids))),"Number of loci" = c(rbind(number_loci, rep("",nids))), "Prob. of recrudescence" = probability_of_recrudescence_correctorder_formatted)
 output_table[is.na(output_table)]=""
 
-
-library(kableExtra)
-
 # formatting loci columns 
 temp = sapply(colnames(genotypedata_latefailures)[-c(1,2)],function(x) strsplit(x,"_")[[1]][1])
 column_breaks_dark = c((which(temp[1:(length(temp)-1)] != temp[2:length(temp)]))+3,length(temp)+3)
@@ -1281,9 +1245,6 @@ names(firstrow_labels) = c("","",locinames,"Individual marker calls","Counting",
 
 
 finaltable = kbl(output_table, caption = "Table. Final classification of recrudescence versus new infection", escape=FALSE, table.attr="id=finaltable") %>%
-# add_indent(c(2:12,14:17,19:24), level_of_indent = 1) %>%
-#   add_header_above(secondrow_labels) %>%
-# add_header_above(firstrow_labels) %>%
   kable_styling(bootstrap_options = "striped", font_size = 10, full_width = TRUE) %>%
   column_spec((dim(output_table)[2] - nloci-2):dim(output_table)[2], bold = T) %>%
   add_header_above(firstrow_labels) %>%
