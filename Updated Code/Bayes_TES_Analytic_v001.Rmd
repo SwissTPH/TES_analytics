@@ -929,7 +929,6 @@ for (site in site_names) {
     jobname <- site
     
     # Site-Specific Data Preparation
-    start_time_site <- Sys.time()
     genotypedata_RR <- genotypedata_latefailures[genotypedata_latefailures$Site == site, -c(2)]
     additional_neutral <- additional_genotypedata[additional_genotypedata$Site == site, -c(2)]
     maxMOI = max(as.numeric(sapply(1:length(colnames(genotypedata_RR)), function (x)
@@ -1071,8 +1070,6 @@ for (site in site_names) {
     all_sites_allelesf[[site]] <- final_allelesf
     all_sites_ids[[site]] <- ids
 
-    end_time_site <- Sys.time()
-    runtime <- end_time_site - start_time_site
 } 
 plan(sequential)
 
