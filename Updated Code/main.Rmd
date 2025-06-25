@@ -1,0 +1,212 @@
+---
+title: "Bayesian Algorithm for molecular correction"
+author: "Veronica Adhiambo"
+date: "2025-06-15"
+output: html_document
+---
+
+# Introduction
+
+This notebook runs a Bayesian algorithm to estimate the probability of malaria recrudescence from genotyping data. It is designed for non-technical users and provides a step-by-step walkthrough.
+
+## What you'll need
+- An Excel file with the required data (see below for format).
+- No need to edit functions.
+
+## What this will do
+- Load and clean the data from the source codes
+- Calls the required functions to:
+  - Define alleles
+  - Recode alleles
+  - Calculate frequencies
+  - Run the Bayesian model
+  - Output classification tables
+- Run the Bayesian model with parallel MCMC 
+- Save and plot results for MCMC convergence diagnosis
+- Output classification tables
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Loading required libraries
+
+```{r cars}
+library(rJava)
+library(gtools)
+library(readxl)
+library(coda)
+library(future)
+library(future.apply)
+library(abind)
+library(gtools)
+library(readxl)
+library(kableExtra)
+
+# Here we are increasing the maximum heap memory available to Java when called from R
+options(java.parameters = "-Xmx4096m")
+```
+
+
+# User defined input
+
+  Edit the following values to match your dataset and desired settings. The R-hat threshold can be maintained at 1.01 and ESS threshold at    400, but you can adjust the chunk size, maximum iterations, and burn-in fraction as needed.
+  
+```{r}
+# Define the number of chains you want to run (Chain default is 4)
+n_chains <- 4 
+
+#  Automated MCMC Control Parameters
+R_hat_threshold <- 1.01
+ESS_threshold <- 400
+chunk_size <- 2000
+max_iterations <- 20000
+burn_in_frac <- 0.25
+
+# this is the size of the repeat region for each microsatellite (ie. for dimers use 2, for trimers use 3)
+locirepeats = c(2,2,3,3,3,3,3)
+
+# this is the tolerance for each marker, used during match counting
+bin_sizes = c(0,0,0,0,0,0,0)
+
+# input file which is an excel file with the following sheets: Late Treatment Failures and Additional. You need to change this to the name of your file
+inputfile = "Angola_2021_TES_7NMS.xlsx"
+```
+
+
+# Data importation and cleaning for Bayesian
+ The input file is an excel file with the following sheets: Late Treatment Failures and Additional.
+
+# Bayesian algorith functions
+ 1. Define alleles
+ 2. Recode alleles
+ 3. Calculate frequencies
+ 4. Posterior frequency
+ 5. Unobserved alleles
+
+
+# MCMC Algorithm contains the following functions and there is no need to make any edits
+ 1. Parallel processing
+ 2. MCMC function
+
+
+These source codes contain helper functions and algorithms that power the model. You don’t need to modify them.
+```{r}
+# Import data for Bayesian algorithm 
+source("import_data.R")
+
+# call sourece for MCMC Diagnosis
+source("mcmc_convergence_report.R")
+
+# Global Storage for Aggregating Results ACROSS ALL SITES 
+all_sites_classification <- list()
+all_sites_parameters <- list()
+all_sites_alleles0 <- list() 
+all_sites_allelesf <- list() 
+all_sites_ids <- list()
+
+# Configure Parallel Plan (Once, for efficiency) the number of workers should be equal to number of chains
+plan(multisession, workers = 4)
+
+# Define the function to run all sites
+source("run_all_sites.R")
+```
+
+
+# Global Summary and output files for the Bayesian approach
+ The sites outputs are being merged into one and the final output file is probability_of_recrudescence_summary with summary of the posterior  probabilities of recrudescence for each sample.
+ 
+
+  This will produce:
+  - A histogram of posterior probabilities
+  - A final table comparing match-counting and Bayesian classifications
+  - Two CSV output files:
+    - `probability_of_recrudescence_summary.csv`
+    - `classification_output_table.csv`
+  
+  Color coding
+  - Green: Prob. < 0.5 → Likely new infection
+  - Orange: Prob. ≥ 0.5 → Likely recrudescence
+
+
+```{r}
+
+if (length(all_sites_ids) == 0) {
+    stop("ERROR: No results were generated from any site. Cannot perform final analysis.")
+}
+list_of_site_dataframes <- lapply(names(all_sites_ids), function(site) {
+    site_ids <- all_sites_ids[[site]]
+    site_classification <- all_sites_classification[[site]]
+    if (is.null(site_ids) || is.null(site_classification) || length(site_ids) != nrow(site_classification)) {
+        warning(sprintf("Data for site '%s' is inconsistent or missing. It will be excluded from the final summary.", site))
+        return(NULL)
+    }
+    data.frame(
+        Site = site,
+        ID = site_ids,
+        Probability = rowMeans(site_classification),
+        stringsAsFactors = FALSE
+    )
+})
+clean_list_of_dataframes <- Filter(Negate(is.null), list_of_site_dataframes)
+if (length(clean_list_of_dataframes) == 0) {
+    stop("ERROR: All sites failed processing. No data available for final analysis.")
+}
+final_summary_df <- do.call(rbind, clean_list_of_dataframes)
+hist(final_summary_df$Probability, breaks = 20, 
+     main = "Distribution of posterior probability of recrudescence (Successful Sites)", 
+     xlab = "Posterior probability of recrudescence")
+write.csv(final_summary_df, "probability_of_recrudescence_summary.csv", row.names = FALSE)
+
+genotypedata_latefailures$base_ID <- gsub(" Day 0| Day Failure", "", genotypedata_latefailures$Sample.ID)
+matched_indices <- match(genotypedata_latefailures$base_ID, final_summary_df$ID)
+probability_of_recrudescence_correctorder <- final_summary_df$Probability[matched_indices]
+is_day_failure_row <- grepl("Day Failure", genotypedata_latefailures$Sample.ID)
+probability_of_recrudescence_correctorder[is_day_failure_row] <- NA
+probability_of_recrudescence_correctorder_formatted <- sapply(probability_of_recrudescence_correctorder, function(x) {
+    if (is.na(x)) return("") else return(format(round(x, 2), nsmall = 2))
+})
+probability_of_recrudescence_correctorder2 <- probability_of_recrudescence_correctorder
+probability_of_recrudescence_correctorder2[is.na(probability_of_recrudescence_correctorder2)] <- -1
+```
+
+
+# Call Match-counting function and merge the posterior probabilities with match counting output
+ This give a good visibility and comparison of the traditional method and how probabilities are being assigned. The output file is called classification_output_table which is a summary of the posterior probabilities of recrudescence for each sample with match-counting classification per marker.
+
+```{r output}
+source("match_counting.R")
+
+output_table = cbind(genotypedata_latefailures,match_output,"Number of Matches" = c(rbind(number_matches, rep("",nids))),"Number of loci" = c(rbind(number_loci, rep("",nids))), "Prob. of recrudescence" = probability_of_recrudescence_correctorder_formatted)
+output_table[is.na(output_table)]=""
+
+# formatting loci columns 
+temp = sapply(colnames(genotypedata_latefailures)[-c(1,2)],function(x) strsplit(x,"_")[[1]][1])
+column_breaks_dark = c((which(temp[1:(length(temp)-1)] != temp[2:length(temp)]))+3,length(temp)+3)
+
+firstrow_labels = (c(" ", " ",column_breaks_dark[1]-3, diff(column_breaks_dark),nloci,2,1))
+names(firstrow_labels) = c("","",locinames,"Individual marker calls","Counting","Bayesian")
+
+
+finaltable = kbl(output_table, caption = "Table. Final classification of recrudescence versus new infection", escape=FALSE, table.attr="id=finaltable") %>%
+  kable_styling(bootstrap_options = "striped", font_size = 10, full_width = TRUE) %>%
+  column_spec((dim(output_table)[2] - nloci-2):dim(output_table)[2], bold = T) %>%
+  add_header_above(firstrow_labels) %>%
+  column_spec(column_breaks_dark, border_left = T) %>%
+    column_spec(dim(output_table)[2], background = ifelse(probability_of_recrudescence_correctorder2 < 0.5 & probability_of_recrudescence_correctorder2>=0, "#58D68D", ifelse(probability_of_recrudescence_correctorder2 >=0.5,"#EDBB99","#ffffff00"))) %>%
+
+  column_spec(1, border_left = T) %>%
+  column_spec(3, border_left = T) %>%
+  column_spec(column_breaks_dark[length(column_breaks_dark)]+nloci, border_left = T) %>%
+  column_spec(column_breaks_dark[length(column_breaks_dark)]+nloci+2, border_left = T) %>%
+  row_spec(seq(from=0,by=2,to = dim(output_table)[1]), extra_css = "border-bottom: 1px solid black") %>%
+
+#  add_indent(c(3:5,7:12), level_of_indent = 1, all_cols = FALSE) %>%
+  footnote(general="NI: New Infection; R: Recrudescence; IND: Indeterminate",general_title="")
+
+write.csv(output_table ,"classification_output_table.csv")
+finaltable
+```
+
+
+
