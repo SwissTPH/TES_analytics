@@ -1,7 +1,5 @@
 # Function to find posterior frequencies for a given locus index
 
-
-
 findposteriorfrequencies = function(locus_index, tempdata, maxMOI, frequencies_RR) {
   data = tempdata[,c(1:maxMOI)+(locus_index-1)*maxMOI];
   nalleles = frequencies_RR[[1]][locus_index]

@@ -5,6 +5,12 @@ date: "2025-06-15"
 output: html_document
 ---
 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
 # Introduction
 
 This notebook runs a Bayesian algorithm to estimate the probability of malaria recrudescence from genotyping data. It is designed for non-technical users and provides a step-by-step walkthrough.
@@ -14,6 +20,7 @@ This notebook runs a Bayesian algorithm to estimate the probability of malaria r
 - No need to edit functions.
 
 ## What this will do
+- Load all necessary packages and sources all our custom R functions from the `R/` directory.
 - Load and clean the data from the source codes
 - Calls the required functions to:
   - Define alleles
@@ -25,13 +32,10 @@ This notebook runs a Bayesian algorithm to estimate the probability of malaria r
 - Save and plot results for MCMC convergence diagnosis
 - Output classification tables
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
 
-# Loading required libraries
+All functions will be available globally for the rest of the analysis.
 
-```{r cars}
+```{r setup}
 library(rJava)
 library(gtools)
 library(readxl)
@@ -43,26 +47,31 @@ library(gtools)
 library(readxl)
 library(kableExtra)
 
-# Here we are increasing the maximum heap memory available to Java when called from R
-options(java.parameters = "-Xmx4096m")
+
+scripts <- list.files("functions_scripts/", full.names = TRUE)
+sapply(scripts, source, .GlobalEnv)
+options(java.parameters = "-Xmx4096m") # Increase Java heap memory  
 ```
 
 
 # User defined input
 
-  Edit the following values to match your dataset and desired settings. The R-hat threshold can be maintained at 1.01 and ESS threshold at    400, but you can adjust the chunk size, maximum iterations, and burn-in fraction as needed.
-  
-```{r}
-# Define the number of chains you want to run (Chain default is 4)
+  Edit the following values to match your dataset and desired settings. The R-hat threshold can be maintained at 1.01 and ESS threshold at 400, but you can adjust the chunk size, maximum iterations, and burn-in fraction as needed.
+```{r user_defined_input}
+
+# MCMC Chain & Parallel Processing Setup
 n_chains <- 4 
 
 #  Automated MCMC Control Parameters
+
 R_hat_threshold <- 1.01
 ESS_threshold <- 400
 chunk_size <- 2000
-max_iterations <- 20000
+max_iterations <- 10000
 burn_in_frac <- 0.25
 
+
+# Locus-specific parameters
 # this is the size of the repeat region for each microsatellite (ie. for dimers use 2, for trimers use 3)
 locirepeats = c(2,2,3,3,3,3,3)
 
@@ -74,43 +83,61 @@ inputfile = "Angola_2021_TES_7NMS.xlsx"
 ```
 
 
-# Data importation and cleaning for Bayesian
- The input file is an excel file with the following sheets: Late Treatment Failures and Additional.
-
-# Bayesian algorith functions
- 1. Define alleles
- 2. Recode alleles
- 3. Calculate frequencies
- 4. Posterior frequency
- 5. Unobserved alleles
 
 
-# MCMC Algorithm contains the following functions and there is no need to make any edits
- 1. Parallel processing
- 2. MCMC function
+# Import and Clean Data
+load the raw data from the specified Excel file and prepare it for analysis.
+```{r import_data, waning=FALSE, message=FALSE} 
 
-
-These source codes contain helper functions and algorithms that power the model. You don’t need to modify them.
-```{r}
-# Import data for Bayesian algorithm 
-source("import_data.R")
-
-# call sourece for MCMC Diagnosis
-source("mcmc_convergence_report.R")
-
-# Global Storage for Aggregating Results ACROSS ALL SITES 
-all_sites_classification <- list()
-all_sites_parameters <- list()
-all_sites_alleles0 <- list() 
-all_sites_allelesf <- list() 
-all_sites_ids <- list()
-
-# Configure Parallel Plan (Once, for efficiency) the number of workers should be equal to number of chains
-plan(multisession, workers = 4)
-
-# Define the function to run all sites
-source("run_all_sites.R")
+# Step 1: We call the function defined in R/import_data.R and pass it the file path. It returns a list containing our two clean data frames.
+imported_data <- import_and_clean_data(filepath = inputfile)
+genotypedata_latefailures <- imported_data$late_failures
+additional_genotypedata <- imported_data$additional
 ```
+
+
+
+
+# Execute the Analysis Pipeline
+
+This single code chunk executes the entire analysis from start to finish. It performs three main steps:
+1.  **Imports and cleans** the raw data from your Excel file using the `import_and_clean_data()` function.
+2.  **Runs the core MCMC analysis** for every site using the powerful `run_all_sites()` engine. This step can take several minutes.
+3.  **Unpacks the results** into variables that will be used for summary and plotting in the next sections.
+
+```{r excute_mcmc}
+
+# Configure parallel plan
+plan(multisession, workers = n_chains)
+
+# Step 2: Execute MCMC for All Sites, Now we pass these clean data frames to our main analysis engine.
+analysis_results <- run_all_sites(
+    genotypedata_latefailures = genotypedata_latefailures,
+    additional_genotypedata = additional_genotypedata,
+    locirepeats = locirepeats,
+    n_chains = n_chains,
+    R_hat_threshold = R_hat_threshold,
+    ESS_threshold = ESS_threshold,
+    chunk_size = chunk_size,
+    max_iterations = max_iterations,
+    burn_in_frac = burn_in_frac
+)
+
+# MCMC is complete, we can now stop the parallel workers
+plan(sequential)
+
+
+# Step 3: Unpack Results the rest of the script will use these variables.
+all_sites_classification <- analysis_results$classifications
+all_sites_parameters     <- analysis_results$parameters
+all_sites_alleles0       <- analysis_results$alleles0
+all_sites_allelesf       <- analysis_results$allelesf
+all_sites_ids            <- analysis_results$ids
+
+# The original data is also passed through for the final summary table
+genotypedata_latefailures <- analysis_results$genotypedata
+```
+
 
 
 # Global Summary and output files for the Bayesian approach
@@ -129,7 +156,8 @@ source("run_all_sites.R")
   - Orange: Prob. ≥ 0.5 → Likely recrudescence
 
 
-```{r}
+
+```{r Summarize Bayesian Results}
 
 if (length(all_sites_ids) == 0) {
     stop("ERROR: No results were generated from any site. Cannot perform final analysis.")
@@ -171,40 +199,58 @@ probability_of_recrudescence_correctorder2[is.na(probability_of_recrudescence_co
 ```
 
 
-# Call Match-counting function and merge the posterior probabilities with match counting output
- This give a good visibility and comparison of the traditional method and how probabilities are being assigned. The output file is called classification_output_table which is a summary of the posterior probabilities of recrudescence for each sample with match-counting classification per marker.
-
-```{r output}
-source("match_counting.R")
-
-output_table = cbind(genotypedata_latefailures,match_output,"Number of Matches" = c(rbind(number_matches, rep("",nids))),"Number of loci" = c(rbind(number_loci, rep("",nids))), "Prob. of recrudescence" = probability_of_recrudescence_correctorder_formatted)
-output_table[is.na(output_table)]=""
-
-# formatting loci columns 
-temp = sapply(colnames(genotypedata_latefailures)[-c(1,2)],function(x) strsplit(x,"_")[[1]][1])
-column_breaks_dark = c((which(temp[1:(length(temp)-1)] != temp[2:length(temp)]))+3,length(temp)+3)
-
-firstrow_labels = (c(" ", " ",column_breaks_dark[1]-3, diff(column_breaks_dark),nloci,2,1))
-names(firstrow_labels) = c("","",locinames,"Individual marker calls","Counting","Bayesian")
 
 
-finaltable = kbl(output_table, caption = "Table. Final classification of recrudescence versus new infection", escape=FALSE, table.attr="id=finaltable") %>%
+# Generate Final Classification Table
+This final step runs the traditional match-counting method and combines its output with the Bayesian probabilities to create a comprehensive comparison table for users.
+
+ 
+
+```{r generate_final_table}
+match_counting_results <- perform_match_counting(
+  genotypedata_latefailures = genotypedata_latefailures,
+  bin_sizes = bin_sizes
+)
+
+output_table <- cbind(
+  genotypedata_latefailures,
+  match_counting_results$match_output_table,
+  "Number of Matches" = c(rbind(match_counting_results$number_matches, rep("", match_counting_results$nids))),
+  "Number of Loci" = c(rbind(match_counting_results$number_loci, rep("", match_counting_results$nids))),
+  "Prob. of Recrudescence" = probability_of_recrudescence_correctorder_formatted
+)
+output_table[is.na(output_table)] <- ""
+
+nloci <- match_counting_results$nloci
+locinames <- match_counting_results$locinames
+genotype_column_span <- ncol(genotypedata_latefailures) - 2
+header_labels <- c(" " = 2, 
+                   "Genotypes" = genotype_column_span, 
+                   "Individual Marker Calls" = nloci, 
+                   "Match Counting" = 2, 
+                   "Bayesian" = 1)
+
+# Create the final, beautifully formatted table
+finaltable <- kbl(output_table, 
+                  caption = "Table. Final classification of recrudescence versus new infection.", 
+                  escape = FALSE) %>%
   kable_styling(bootstrap_options = "striped", font_size = 10, full_width = TRUE) %>%
-  column_spec((dim(output_table)[2] - nloci-2):dim(output_table)[2], bold = T) %>%
-  add_header_above(firstrow_labels) %>%
-  column_spec(column_breaks_dark, border_left = T) %>%
-    column_spec(dim(output_table)[2], background = ifelse(probability_of_recrudescence_correctorder2 < 0.5 & probability_of_recrudescence_correctorder2>=0, "#58D68D", ifelse(probability_of_recrudescence_correctorder2 >=0.5,"#EDBB99","#ffffff00"))) %>%
+  add_header_above(header_labels, bold = TRUE) %>%
+  column_spec(3, border_left = TRUE) %>%
+  column_spec(ncol(genotypedata_latefailures) + 1, border_left = TRUE) %>%
+  column_spec(ncol(genotypedata_latefailures) + nloci + 1, border_left = TRUE) %>%
+  column_spec(ncol(genotypedata_latefailures) + nloci + 3, border_left = TRUE) %>%
+  column_spec(ncol(output_table), 
+              bold = TRUE,
+              background = ifelse(probability_of_recrudescence_correctorder2 < 0.5 & probability_of_recrudescence_correctorder2 >= 0, 
+                                  "#C8E6C9", # Softer Green
+                                  ifelse(probability_of_recrudescence_correctorder2 >= 0.5, 
+                                         "#FFCCBC", # Softer Orange
+                                         "#FFFFFF00"))) %>%
+  footnote(general = "Classification is based on the Bayesian posterior probability: < 0.5 is considered a New Infection (NI, green), ≥ 0.5 is considered a Recrudescence (R, orange).",
+           general_title = "")
 
-  column_spec(1, border_left = T) %>%
-  column_spec(3, border_left = T) %>%
-  column_spec(column_breaks_dark[length(column_breaks_dark)]+nloci, border_left = T) %>%
-  column_spec(column_breaks_dark[length(column_breaks_dark)]+nloci+2, border_left = T) %>%
-  row_spec(seq(from=0,by=2,to = dim(output_table)[1]), extra_css = "border-bottom: 1px solid black") %>%
-
-#  add_indent(c(3:5,7:12), level_of_indent = 1, all_cols = FALSE) %>%
-  footnote(general="NI: New Infection; R: Recrudescence; IND: Indeterminate",general_title="")
-
-write.csv(output_table ,"classification_output_table.csv")
+write.csv(output_table, "classification_output_table.csv", row.names = FALSE)
 finaltable
 ```
 

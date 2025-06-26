@@ -1,15 +1,8 @@
 
-
-# Call the Bayesian functions
-source("findposterior_frequencies.R")
-source("define_alleles.R")
-source("unobserved_alleles.R")
-source("calculate_frequencies.R")
-
 # Define the chain function for parallel processing
 run_one_chain <- function(chain_id,
                           nruns, burnin, record_interval,
-                          nids, nloci, maxMOI, locinames,
+                          nids, ids, nloci, maxMOI, locinames,
                           genotypedata_RR, additional_neutral, alleles_definitions_RR
 ) {
   

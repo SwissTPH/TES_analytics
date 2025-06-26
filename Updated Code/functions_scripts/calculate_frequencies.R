@@ -1,6 +1,3 @@
-# Call the recode_allele function
-source("recode_alleles.R")
-
 calculate_frequencies3 = function(genotypedata, alleles_definitions) {
   
   ids = genotypedata$Sample.ID
