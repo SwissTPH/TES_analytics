@@ -3,35 +3,40 @@ title: "Bayesian Algorithm for molecular correction"
 author: "Veronica Adhiambo"
 date: "2025-06-15"
 output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
 ---
-
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-
 # Introduction
 
-This notebook runs a Bayesian algorithm to estimate the probability of malaria recrudescence from genotyping data. It is designed for non-technical users and provides a step-by-step walkthrough.
+This notebook runs a Bayesian algorithm to estimate the probability of
+malaria recrudescence from genotyping data. It is designed for
+non-technical users and provides a step-by-step walkthrough.
 
 ## What you'll need
-- An Excel file with the required data (see below for format).
-- No need to edit functions.
+
+-   An Excel file with the required data (see below for format).
+-   No need to edit functions.
 
 ## What this will do
-- Load all necessary packages and sources all our custom R functions from the `R/` directory.
-- Load and clean the data from the source codes
-- Calls the required functions to:
-  - Define alleles
-  - Recode alleles
-  - Calculate frequencies
-  - Run the Bayesian model
-  - Output classification tables
-- Run the Bayesian model with parallel MCMC 
-- Save and plot results for MCMC convergence diagnosis
-- Output classification tables
 
+-   Load all necessary packages and sources all our custom R functions
+    from the `R/` directory.
+-   Load and clean the data from the source codes
+-   Calls the required functions to:
+    -   Define alleles
+    -   Recode alleles
+    -   Calculate frequencies
+    -   Run the Bayesian model
+    -   Output classification tables
+-   Run the Bayesian model with parallel MCMC
+-   Save and plot results for MCMC convergence diagnosis
+-   Output classification tables
 
 All functions will be available globally for the rest of the analysis.
 
@@ -53,10 +58,13 @@ sapply(scripts, source, .GlobalEnv)
 options(java.parameters = "-Xmx4096m") # Increase Java heap memory  
 ```
 
-
 # User defined input
 
-  Edit the following values to match your dataset and desired settings. The R-hat threshold can be maintained at 1.01 and ESS threshold at 400, but you can adjust the chunk size, maximum iterations, and burn-in fraction as needed.
+Edit the following values to match your dataset and desired settings.
+The R-hat threshold can be maintained at 1.01 and ESS threshold at 400,
+but you can adjust the chunk size, maximum iterations, and burn-in
+fraction as needed.
+
 ```{r user_defined_input}
 
 # MCMC Chain & Parallel Processing Setup
@@ -82,12 +90,12 @@ bin_sizes = c(0,0,0,0,0,0,0)
 inputfile = "Angola_2021_TES_7NMS.xlsx"
 ```
 
-
-
-
 # Import and Clean Data
-load the raw data from the specified Excel file and prepare it for analysis.
-```{r import_data, waning=FALSE, message=FALSE} 
+
+load the raw data from the specified Excel file and prepare it for
+analysis.
+
+```{r import_data, waning=FALSE, message=FALSE}
 
 # Step 1: We call the function defined in R/import_data.R and pass it the file path. It returns a list containing our two clean data frames.
 imported_data <- import_and_clean_data(filepath = inputfile)
@@ -95,15 +103,15 @@ genotypedata_latefailures <- imported_data$late_failures
 additional_genotypedata <- imported_data$additional
 ```
 
-
-
-
 # Execute the Analysis Pipeline
 
-This single code chunk executes the entire analysis from start to finish. It performs three main steps:
-1.  **Imports and cleans** the raw data from your Excel file using the `import_and_clean_data()` function.
-2.  **Runs the core MCMC analysis** for every site using the powerful `run_all_sites()` engine. This step can take several minutes.
-3.  **Unpacks the results** into variables that will be used for summary and plotting in the next sections.
+This single code chunk executes the entire analysis from start to
+finish. It performs three main steps: 1. **Imports and cleans** the raw
+data from your Excel file using the `import_and_clean_data()` function.
+2. **Runs the core MCMC analysis** for every site using the powerful
+`run_all_sites()` engine. This step can take several minutes. 3.
+**Unpacks the results** into variables that will be used for summary and
+plotting in the next sections.
 
 ```{r excute_mcmc}
 
@@ -138,24 +146,19 @@ all_sites_ids            <- analysis_results$ids
 genotypedata_latefailures <- analysis_results$genotypedata
 ```
 
-
-
 # Global Summary and output files for the Bayesian approach
- The sites outputs are being merged into one and the final output file is probability_of_recrudescence_summary with summary of the posterior  probabilities of recrudescence for each sample.
- 
 
-  This will produce:
-  - A histogram of posterior probabilities
-  - A final table comparing match-counting and Bayesian classifications
-  - Two CSV output files:
-    - `probability_of_recrudescence_summary.csv`
-    - `classification_output_table.csv`
-  
-  Color coding
-  - Green: Prob. < 0.5 → Likely new infection
-  - Orange: Prob. ≥ 0.5 → Likely recrudescence
+The sites outputs are being merged into one and the final output file is
+probability_of_recrudescence_summary with summary of the posterior
+probabilities of recrudescence for each sample.
 
+This will produce: - A histogram of posterior probabilities - A final
+table comparing match-counting and Bayesian classifications - Two CSV
+output files: - `probability_of_recrudescence_summary.csv` -
+`classification_output_table.csv`
 
+Color coding - Green: Prob. \< 0.5 → Likely new infection - Orange:
+Prob. ≥ 0.5 → Likely recrudescence
 
 ```{r Summarize Bayesian Results}
 
@@ -198,13 +201,11 @@ probability_of_recrudescence_correctorder2 <- probability_of_recrudescence_corre
 probability_of_recrudescence_correctorder2[is.na(probability_of_recrudescence_correctorder2)] <- -1
 ```
 
-
-
-
 # Generate Final Classification Table
-This final step runs the traditional match-counting method and combines its output with the Bayesian probabilities to create a comprehensive comparison table for users.
 
- 
+This final step runs the traditional match-counting method and combines
+its output with the Bayesian probabilities to create a comprehensive
+comparison table for users.
 
 ```{r generate_final_table}
 match_counting_results <- perform_match_counting(
@@ -253,6 +254,3 @@ finaltable <- kbl(output_table,
 write.csv(output_table, "classification_output_table.csv", row.names = FALSE)
 finaltable
 ```
-
-
-
