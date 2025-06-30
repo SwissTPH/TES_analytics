@@ -4,8 +4,6 @@
 
 import_and_clean_data <- function(filepath) {
   
-  message("INFO: Importing and cleaning data from: ", filepath)
-  
   # Read Late Treatment Failures Data
   late_failures_df <- as.data.frame(read_excel(filepath, sheet = "Late Treatment Failures", skip = 3))
   missing_markers <- c(0, "0", "N/A", "-", "NA")
@@ -16,10 +14,10 @@ import_and_clean_data <- function(filepath) {
   dayF_ids <- unique(unlist(strsplit(late_failures_df$Sample.ID[grepl("Day Failure", late_failures_df$Sample.ID)], " Day Failure")))
   
   if (sum(!paste(day0_ids, "Day Failure") %in% late_failures_df$Sample.ID) > 0) {
-    stop("FATAL ERROR: Some 'Day 0' samples are missing their 'Day Failure' pair. Please check your data.")
+    stop("Some 'Day 0' samples are missing their 'Day Failure' pair. Please check your data.")
   }
   if (sum(!paste(dayF_ids, "Day 0") %in% late_failures_df$Sample.ID) > 0) {
-    stop("FATAL ERROR: Some 'Day Failure' samples are missing their 'Day 0' pair. Please check your data.")
+    stop("Some 'Day Failure' samples are missing their 'Day 0' pair. Please check your data.")
   }
 
   # Read Additional Data
@@ -33,10 +31,12 @@ import_and_clean_data <- function(filepath) {
 
   cols_to_convert_late <- colnames(late_failures_df)[-c(1, 2)]
   late_failures_df[, cols_to_convert_late] <- lapply(late_failures_df[, cols_to_convert_late], as.numeric)
+  function(x) suppressWarnings(as.numeric(x))
   
   if (nrow(additional_df) > 0) {
     cols_to_convert_add <- colnames(additional_df)[-c(1, 2)]
     additional_df[, cols_to_convert_add] <- lapply(additional_df[, cols_to_convert_add], as.numeric)
+    function(x) suppressWarnings(as.numeric(x))
   }
   return(
     list(
