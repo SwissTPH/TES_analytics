@@ -12,7 +12,7 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-# Introduction
+## Introduction
 
 This notebook runs a Bayesian algorithm to estimate the probability of
 malaria recrudescence from genotyping data. It is designed for
@@ -82,9 +82,6 @@ burn_in_frac <- 0.25
 # Locus-specific parameters
 # this is the size of the repeat region for each microsatellite (ie. for dimers use 2, for trimers use 3)
 locirepeats = c(2,2,3,3,3,3,3)
-
-# this is the tolerance for each marker, used during match counting
-bin_sizes = c(0,0,0,0,0,0,0)
 
 # input file which is an excel file with the following sheets: Late Treatment Failures and Additional. You need to change this to the name of your file
 inputfile = "Angola_2021_TES_7NMS.xlsx"
@@ -163,94 +160,50 @@ Prob. ≥ 0.5 → Likely recrudescence
 ```{r Summarize Bayesian Results}
 
 if (length(all_sites_ids) == 0) {
-    stop("ERROR: No results were generated from any site. Cannot perform final analysis.")
+  stop("ERROR: No results were generated from any site no analysis is performed.")
 }
+
+# --- Create a single summary data frame ---
 list_of_site_dataframes <- lapply(names(all_sites_ids), function(site) {
-    site_ids <- all_sites_ids[[site]]
-    site_classification <- all_sites_classification[[site]]
-    if (is.null(site_ids) || is.null(site_classification) || length(site_ids) != nrow(site_classification)) {
-        warning(sprintf("Data for site '%s' is inconsistent or missing. It will be excluded from the final summary.", site))
-        return(NULL)
-    }
-    data.frame(
-        Site = site,
-        ID = site_ids,
-        Probability = rowMeans(site_classification),
-        stringsAsFactors = FALSE
-    )
+  site_ids <- all_sites_ids[[site]]
+  site_classification <- all_sites_classification[[site]]
+  
+  if (is.null(site_ids) || is.null(site_classification) || length(site_ids) != nrow(site_classification)) {
+    warning(sprintf("Data for site '%s' is inconsistent or missing. It will be excluded from the final summary.", site))
+    return(NULL)
+  }
+  
+  data.frame(
+    Site = site,
+    ID = site_ids,
+    Probability = rowMeans(site_classification),
+    stringsAsFactors = FALSE
+  )
 })
+
 clean_list_of_dataframes <- Filter(Negate(is.null), list_of_site_dataframes)
+
 if (length(clean_list_of_dataframes) == 0) {
-    stop("ERROR: All sites failed processing. No data available for final analysis.")
+  stop("ERROR: All sites failed processing. No data available for final analysis.")
 }
+
 final_summary_df <- do.call(rbind, clean_list_of_dataframes)
 hist(final_summary_df$Probability, breaks = 20, 
-     main = "Distribution of posterior probability of recrudescence (Successful Sites)", 
+     main = "Distribution of posterior probability of recrudescence (All Sites)", 
      xlab = "Posterior probability of recrudescence")
+
 write.csv(final_summary_df, "probability_of_recrudescence_summary.csv", row.names = FALSE)
 
+#Match probabilities back to the original genotype data
 genotypedata_latefailures$base_ID <- gsub(" Day 0| Day Failure", "", genotypedata_latefailures$Sample.ID)
 matched_indices <- match(genotypedata_latefailures$base_ID, final_summary_df$ID)
 probability_of_recrudescence_correctorder <- final_summary_df$Probability[matched_indices]
 is_day_failure_row <- grepl("Day Failure", genotypedata_latefailures$Sample.ID)
 probability_of_recrudescence_correctorder[is_day_failure_row] <- NA
+
 probability_of_recrudescence_correctorder_formatted <- sapply(probability_of_recrudescence_correctorder, function(x) {
     if (is.na(x)) return("") else return(format(round(x, 2), nsmall = 2))
 })
 probability_of_recrudescence_correctorder2 <- probability_of_recrudescence_correctorder
 probability_of_recrudescence_correctorder2[is.na(probability_of_recrudescence_correctorder2)] <- -1
-```
-
-# Generate Final Classification Table
-
-This final step runs the traditional match-counting method and combines
-its output with the Bayesian probabilities to create a comprehensive
-comparison table for users.
-
-```{r generate_final_table}
-match_counting_results <- perform_match_counting(
-  genotypedata_latefailures = genotypedata_latefailures,
-  bin_sizes = bin_sizes
-)
-
-output_table <- cbind(
-  genotypedata_latefailures,
-  match_counting_results$match_output_table,
-  "Number of Matches" = c(rbind(match_counting_results$number_matches, rep("", match_counting_results$nids))),
-  "Number of Loci" = c(rbind(match_counting_results$number_loci, rep("", match_counting_results$nids))),
-  "Prob. of Recrudescence" = probability_of_recrudescence_correctorder_formatted
-)
-output_table[is.na(output_table)] <- ""
-
-nloci <- match_counting_results$nloci
-locinames <- match_counting_results$locinames
-genotype_column_span <- ncol(genotypedata_latefailures) - 2
-header_labels <- c(" " = 2, 
-                   "Genotypes" = genotype_column_span, 
-                   "Individual Marker Calls" = nloci, 
-                   "Match Counting" = 2, 
-                   "Bayesian" = 1)
-
-# Create the final, beautifully formatted table
-finaltable <- kbl(output_table, 
-                  caption = "Table. Final classification of recrudescence versus new infection.", 
-                  escape = FALSE) %>%
-  kable_styling(bootstrap_options = "striped", font_size = 10, full_width = TRUE) %>%
-  add_header_above(header_labels, bold = TRUE) %>%
-  column_spec(3, border_left = TRUE) %>%
-  column_spec(ncol(genotypedata_latefailures) + 1, border_left = TRUE) %>%
-  column_spec(ncol(genotypedata_latefailures) + nloci + 1, border_left = TRUE) %>%
-  column_spec(ncol(genotypedata_latefailures) + nloci + 3, border_left = TRUE) %>%
-  column_spec(ncol(output_table), 
-              bold = TRUE,
-              background = ifelse(probability_of_recrudescence_correctorder2 < 0.5 & probability_of_recrudescence_correctorder2 >= 0, 
-                                  "#C8E6C9", # Softer Green
-                                  ifelse(probability_of_recrudescence_correctorder2 >= 0.5, 
-                                         "#FFCCBC", # Softer Orange
-                                         "#FFFFFF00"))) %>%
-  footnote(general = "Classification is based on the Bayesian posterior probability: < 0.5 is considered a New Infection (NI, green), ≥ 0.5 is considered a Recrudescence (R, orange).",
-           general_title = "")
-
-write.csv(output_table, "classification_output_table.csv", row.names = FALSE)
-finaltable
 ```
