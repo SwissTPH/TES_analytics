@@ -31,12 +31,10 @@ import_and_clean_data <- function(filepath) {
 
   cols_to_convert_late <- colnames(late_failures_df)[-c(1, 2)]
   late_failures_df[, cols_to_convert_late] <- lapply(late_failures_df[, cols_to_convert_late], as.numeric)
-  function(x) suppressWarnings(as.numeric(x))
   
   if (nrow(additional_df) > 0) {
     cols_to_convert_add <- colnames(additional_df)[-c(1, 2)]
     additional_df[, cols_to_convert_add] <- lapply(additional_df[, cols_to_convert_add], as.numeric)
-    function(x) suppressWarnings(as.numeric(x))
   }
   return(
     list(
