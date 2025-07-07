@@ -1,4 +1,10 @@
-# Main function for running the Bayesian algorithm for length-polymorphic markers
+############################
+# Main function for running the
+# Bayesian algorithm for length-polymorphic markers
+#
+# Author: Mateusz Plucinski
+# Updates: Veronica Adhiambo, Monica Golumbeanu
+############################
 
 # Necessary libraries
 library(gtools)
@@ -7,8 +13,25 @@ library(readxl)
 library(cluster)
 library(dplyr)
 
+# =======================
+# Set your working directory here (directory where the code is)
+# Please update the path below to match your system
+# =======================
+setwd("~/GitRepos/TES_analytics/Bayes_TES/Microsatellites/initial_version/")
+
+# =======================
+# Set your results directory here (directory where results will be saved)
+# Please update the path below to match your system
+# =======================
+output_folder = "~/GitRepos/TES_analytics/Bayes_TES/Microsatellites/Results/"
+if (!dir.exists(output_folder)) {
+    dir.create(output_folder, showWarnings = TRUE)
+} else {
+    print("Results folder already exists. The folder will be overwritten.")
+}
+
+
 # Additional functions
-setwd("D:/OneDrive/Master's Class notes/AIMS Rwanda - Mathematical Sciences - Epidemiology/Thesis Phase/Bayesian Algorithm Presentation/Code Version/initial_version")
 source("define_alleles.r")
 source("calculate_frequencies3.r")
 source("recode_alleles.r")
@@ -18,36 +41,21 @@ source("findposteriorfrequencies.r")
 # Options
 # memory.limit(size=50000)
 options(java.parameters = "-Xmx4096m")
-
-#########################
-# USER INPUT
-# To be modified according to user's file system
 set.seed(1)
-# Name of input file and output folder
-# If using a different file than the example, to be modified according to user's file system
-# Taking the name from the folder contents:
-list_datasets = list.files("~/GitRepos/bayesian_analysis_Uganda/datasets/", full.names = TRUE)
-args = commandArgs(TRUE)
-inputdata = list_datasets[as.integer(args[1])]
 
+# =======================
+# Det your input data file here
+# Please update the path below to match your input data file on your system
+# =======================
+# Name of input file
 inputdata = "PPQ_63Days_simulated.xlsx"
 
-jobname_base <- file_path_sans_ext(basename(inputdata))
-output_folder <- paste0("results/", jobname_base, "/")
-if (!dir.exists(output_folder)) {
-  dir.create(output_folder, recursive = TRUE)
-  cat("Successfully created output directory:", output_folder, "\n")
-}
-
-
-# To be modified according to user's file system
-# output_folder = paste0("~/genotyping/analysis_Uganda/results_70k/",
-#                        file_path_sans_ext(basename(inputdata)), "/")
-# dir.create(output_folder, showWarnings = FALSE)
+# =======================
+# Set the fragment length precision here
 # Precision of fragment length measurement for each marker
 # (2 or 3 for capillary electrophoresis for microsatelites/msp, 10-25 for gels)
-
-# Set the bin size
+# Order of the columns: MSP1, MSP2, third marker (GLURP or microsatellites)
+# =======================
 if(grepl("GLURP", inputdata)) {
   locirepeats = c(10, 10, 50)
 } else if (grepl("TA1", inputdata) | grepl("POLY", inputdata) |
@@ -58,8 +66,18 @@ if(grepl("GLURP", inputdata)) {
   locirepeats = c(10, 10, 1)
 }
 
+# =======================
+# "Set the MCMC specifications.
+# Running more iterations increases the probability
+# that the MCMC has properly converged
+# =======================
+# For first setup and testing (short execution time) you can set nruns = 1000
+nruns = 70000
+record_interval = ceiling(nruns/1000);
+burnin = ceiling(nruns * 0.25);
+
 print(paste("Processing file", inputdata))
-print("Using the bins:")
+print("Using the fragment length precisions:")
 print(locirepeats)
 ###########################
 
@@ -100,10 +118,6 @@ additional_genotypedata = read_excel(inputdata,sheet=2)
 sampleid = paste(additional_genotypedata$PatientID,"D",additional_genotypedata$Day,sep="")
 additional_genotypedata = cbind(Sample.ID = sampleid,additional_genotypedata[,-c(1,2)])
 
-
-nruns = 70000
-record_interval = ceiling(nruns/1000);
-burnin = ceiling(nruns * 0.25);
 
 # This is the same as Run.r, added here to ease debugging
 # numeric_id = as.numeric(gsub(" D.*","",genotypedata_latefailures$Sample.ID))
@@ -259,13 +273,13 @@ for (site in site_names) {
   for (j in 1:nloci) {
     locus = locinames[j]
     locicolumns = grepl(paste(locus,"_",sep=""), colnames(genotypedata_RR))
-    
+
     oldalleles_char = as.matrix(genotypedata_RR[, locicolumns])
     oldalleles = apply(oldalleles_char, 2, as.numeric)
     if (is.vector(oldalleles)) {
       oldalleles = matrix(oldalleles, length(oldalleles), 1)
     }
-    
+
     newalleles = oldalleles
     ncolumns = ncol(oldalleles)
     for (i in 1:ncolumns) {
@@ -277,13 +291,13 @@ for (site in site_names) {
     newalleles[is.na(newalleles)] = 0
     oldalleles = matrix(as.numeric(unlist(c(oldalleles))),dim(oldalleles)[1],dim(oldalleles)[2])
     oldalleles[is.na(oldalleles)] = 0
-    
+
     oldalleles[newalleles == 0] = 0
     alleles0[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(oldalleles)[2])] = oldalleles[grepl("Day 0",genotypedata_RR$Sample.ID),]
     allelesf[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(oldalleles)[2])] = oldalleles[grepl("Day Failure",genotypedata_RR$Sample.ID),]
     recoded0[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(newalleles)[2])] = newalleles[grepl("Day 0",genotypedata_RR$Sample.ID),]
     recodedf[,(maxMOI*(j-1)+1) : (maxMOI*(j-1) + dim(newalleles)[2])] = newalleles[grepl("Day Failure",genotypedata_RR$Sample.ID),]
-    
+
   }
 
 
@@ -641,5 +655,5 @@ colnames(posterior_distribution_of_recrudescence)[1] = "ID"
 
 probability_of_recrudescence = cbind(ids_all,rowMeans2(state_classification_all))
 
-hist(rowMeans2(state_classification_all),breaks=10,main="Distribution of posterior probability of recrudescence",xlab="Posterior probability of recrudescence")
+hist(rowMeans2(state_classification_all), breaks=10, main="Distribution of posterior probability of recrudescence",xlab="Posterior probability of recrudescence")
 write.csv(probability_of_recrudescence, paste0(output_folder, "probability_of_recrudescence_ALL.csv"))
